@@ -1,0 +1,6 @@
+numpy>=1.23
+pytest>=7.0
+
+# Optional but recommended for thesis-quality retrieval:
+# sentence-transformers>=2.7
+# vllm>=0.4
