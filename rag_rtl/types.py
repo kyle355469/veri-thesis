@@ -32,6 +32,7 @@ class RtlTask:
     module_signature: Optional[str] = None
     constraints: List[str] = field(default_factory=list)
     max_repair_attempts: int = 1
+    top_module: Optional[str] = None
 
 
 @dataclass
@@ -52,7 +53,9 @@ class VerificationReport:
 
     @property
     def passed(self) -> bool:
-        return self.syntax_passed and self.lint_passed
+        external_results = [item.passed for item in self.diagnostics if item.tool == "external_testbench"]
+        external_passed = all(external_results) if external_results else True
+        return self.syntax_passed and self.lint_passed and external_passed
 
 
 @dataclass
@@ -62,5 +65,7 @@ class PipelineResponse:
     retrieved_doc_ids: List[str]
     cache_source: str
     repair_attempts: int
+    llm_actions: List[Dict[str, Any]] = field(default_factory=list)
+    prompt: str = ""
     timings: Dict[str, float] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)

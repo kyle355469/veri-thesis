@@ -6,7 +6,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+from .config import CacheConfig, RuntimeConfig
 from .embeddings import Embedder
+from .json_utils import json_default
 from .pipeline import RagRtlPipeline
 from .types import RtlTask
 from .vector_store import VectorStore
@@ -35,6 +37,9 @@ def run_evaluation(
     output_path: str | Path,
     llm_client: Any = None,
     verifier: Any = None,
+    cache_mode: str = "keywords",
+    cache_reuse_threshold: float = 0.95,
+    cache_evidence_threshold: float = 0.88,
 ) -> Dict[str, Any]:
     if mode not in {"llm_only", "rag", "rag_cache_verify"}:
         raise ValueError("mode must be one of: llm_only, rag, rag_cache_verify")
@@ -46,15 +51,23 @@ def run_evaluation(
 
     with tempfile.TemporaryDirectory(prefix="rag_rtl_eval_") as tempdir:
         cache_path = Path(tempdir) / "cache.json" if mode != "rag_cache_verify" else "data/history_cache.json"
-        cache_threshold = 2.0 if mode in {"llm_only", "rag"} else 0.90
+        reuse_threshold = 2.0 if mode in {"llm_only", "rag"} else cache_reuse_threshold
+        evidence_threshold = 2.0 if mode in {"llm_only", "rag"} else cache_evidence_threshold
         pipeline = RagRtlPipeline(
             store=store,
             embedder=embedder,
             llm_client=llm_client,
             verifier=verifier,
-            cache_path=cache_path,
-            monitor_path=Path(tempdir) / "monitor.jsonl",
-            cache_threshold=cache_threshold,
+            cache_config=CacheConfig(
+                path=cache_path,
+                mode=cache_mode,
+                reuse_threshold=reuse_threshold,
+                evidence_threshold=evidence_threshold,
+            ),
+            runtime_config=RuntimeConfig(
+                monitor_path=Path(tempdir) / "monitor.jsonl",
+                failed_log_path=Path(tempdir) / "failed_attempts.jsonl",
+            ),
         )
 
         records: List[Dict[str, Any]] = []
@@ -70,6 +83,8 @@ def run_evaluation(
                     "repair_attempts": response.repair_attempts,
                     "cache_source": response.cache_source,
                     "retrieved_doc_ids": response.retrieved_doc_ids,
+                    "cache_decision": response.metadata.get("cache_decision"),
+                    "best_history_match": response.metadata.get("best_history_match"),
                     "timings": response.timings,
                 }
             )
@@ -85,5 +100,5 @@ def run_evaluation(
         "total_s": time.perf_counter() - start,
         "records": records,
     }
-    output_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    output_path.write_text(json.dumps(summary, default=json_default, indent=2), encoding="utf-8")
     return summary

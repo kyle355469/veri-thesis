@@ -10,5 +10,7 @@
 
 * add a external module for actually verifying the code with testbenches.
 
-* for the latest report, even cache doesn't hit, still output the highest ranked history example, it can help tune the hit threshold and also provide insights on the retrieval performance.
+* for the latest report, first, output the user prompt, sceond, even cache doesn't hit, still output the highest ranked history example, it can help tune the hit threshold and also provide insights on the retrieval performance.
+
+* add a mode that can print all the generated text during the process, not just the final output, it can help analyze the generation process and identify where it might go wrong.
 

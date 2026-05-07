@@ -1,0 +1,404 @@
+{"doc_id": "merged-99-ec95fee304d50e83:anode_driver", "problem": "Please solve the following Verilog coding problem. Think first INTERNALLY about how to arrive at the correct solution. Then, output ONLY the Verilog code you designed in this format: <answer>\n```verilog\n...\n```\n</answer>. No explanations, comments, or additional text are allowed outside of the specified formatting.\n\n### Verilog Coding Problem\n\n\"\"\"\nDesign an **anode driver** for a 4‑digit common‑anode seven‑segment display. The driver must:\n\n* Receive a **clock‑enable** signal `clk_en`. The driver should advance to the next digit on each rising edge of this signal.\n* Include an **asynchronous active‑high clear** input `clr`. When `clr` is asserted, the driver must reset to its initial state.\n* Have an additional clock input `clk` (it does not need to be used inside the module but must be part of the interface).\n* Output a 4‑bit vector `AN[3:0]` that drives the anodes of the display. The anode lines are **active‑low**, so exactly one bit must be low at any time. After a reset the sequence of patterns should be  \n  `1110`, `1101`, `1011`, `0111`, and then repeat indefinitely as `clk_en` pulses.\n* Output a 2‑bit register `S[1:0]` that holds the current digit index (0 for the first pattern, 1 for the second, etc.). This value should increment with each `clk_en` edge and wrap around after reaching 3.\n\nWrite the Verilog code for a module named **anode_driver** that satisfies these specifications. Provide the port list, internal register declarations, and the appropriate always block(s) that implement the required behavior.\n\n**Interface**\n\n| Signal Name | Direction | Width | Description |\n|-------------|-----------|-------|-------------|\n| `clk_en`    | input     | 1     | Clock‑enable; a rising edge advances to the next digit |\n| `clk`       | input     | 1     | Regular clock (not used internally) |\n| `clr`       | input     | 1     | Asynchronous active‑high clear/reset |\n| `AN`        | output reg| 4     | Active‑low anode control signals for the 4 digits |\n| `S`         | output reg| 2     | Current digit index (0‑3) |\n\nThe implementation should match the behavior described above exactly.\n\"\"\"", "solution": "datapath graph merged-99-ec95fee304d50e83:anode_driver\nmodule anode_driver\nports output AN[4] output S[2] input clk[1] input clk_en[1] input clr[1]\noperations $adff:2 $eq:3 $logic_not:1 $pmux:2\ndependencies\nclr -> S[0] via $adff\nclr -> S[1] via $adff\nclk_en -> S[0] via $adff\nclk_en -> S[1] via $adff\n$0\\S[1:0][0] -> S[0] via $adff\n$0\\S[1:0][0] -> S[1] via $adff\n$0\\S[1:0][1] -> S[0] via $adff\n$0\\S[1:0][1] -> S[1] via $adff\nclr -> AN[0] via $adff\nclr -> AN[1] via $adff\nclr -> AN[2] via $adff\nclr -> AN[3] via $adff\nclk_en -> AN[0] via $adff\nclk_en -> AN[1] via $adff\nclk_en -> AN[2] via $adff\nclk_en -> AN[3] via $adff\n$0\\AN[3:0][0] -> AN[0] via $adff\n$0\\AN[3:0][0] -> AN[1] via $adff\n$0\\AN[3:0][0] -> AN[2] via $adff\n$0\\AN[3:0][0] -> AN[3] via $adff\n$0\\AN[3:0][1] -> AN[0] via $adff\n$0\\AN[3:0][1] -> AN[1] via $adff\n$0\\AN[3:0][1] -> AN[2] via $adff\n$0\\AN[3:0][1] -> AN[3] via $adff\n$0\\AN[3:0][2] -> AN[0] via $adff\n$0\\AN[3:0][2] -> AN[1] via $adff\n$0\\AN[3:0][2] -> AN[2] via $adff\n$0\\AN[3:0][2] -> AN[3] via $adff\n$0\\AN[3:0][3] -> AN[0] via $adff\n$0\\AN[3:0][3] -> AN[1] via $adff\n$0\\AN[3:0][3] -> AN[2] via $adff\n$0\\AN[3:0][3] -> AN[3] via $adff\nS[0] -> $procmux$10_CMP via $eq\nS[1] -> $procmux$10_CMP via $eq\n1 -> $procmux$10_CMP via $eq\n0 -> $procmux$10_CMP via $eq\nS[0] -> $procmux$11_CMP via $logic_not\nS[1] -> $procmux$11_CMP via $logic_not\nx -> $0\\AN[3:0][0] via $pmux\nx -> $0\\AN[3:0][1] via $pmux\nx -> $0\\AN[3:0][2] via $pmux\nx -> $0\\AN[3:0][3] via $pmux\nx -> $0\\AN[3:0][0] via $pmux\nx -> $0\\AN[3:0][1] via $pmux\nx -> $0\\AN[3:0][2] via $pmux\nx -> $0\\AN[3:0][3] via $pmux\nx -> $0\\AN[3:0][0] via $pmux\nx -> $0\\AN[3:0][1] via $pmux\nx -> $0\\AN[3:0][2] via $pmux\nx -> $0\\AN[3:0][3] via $pmux\nx -> $0\\AN[3:0][0] via $pmux\nx -> $0\\AN[3:0][1] via $pmux\nx -> $0\\AN[3:0][2] via $pmux\nx -> $0\\AN[3:0][3] via $pmux\n0 -> $0\\AN[3:0][0] via $pmux\n0 -> $0\\AN[3:0][1] via $pmux\n0 -> $0\\AN[3:0][2] via $pmux\n0 -> $0\\AN[3:0][3] via $pmux\n1 -> $0\\AN[3:0][0] via $pmux\n1 -> $0\\AN[3:0][1] via $pmux\n1 -> $0\\AN[3:0][2] via $pmux\n1 -> $0\\AN[3:0][3] via $pmux\n1 -> $0\\AN[3:0][0] via $pmux\n1 -> $0\\AN[3:0][1] via $pmux\n1 -> $0\\AN[3:0][2] via $pmux\n1 -> $0\\AN[3:0][3] via $pmux\n1 -> $0\\AN[3:0][0] via $pmux\n1 -> $0\\AN[3:0][1] via $pmux\n1 -> $0\\AN[3:0][2] via $pmux\n1 -> $0\\AN[3:0][3] via $pmux\n1 -> $0\\AN[3:0][0] via $pmux\n1 -> $0\\AN[3:0][1] via $pmux\n1 -> $0\\AN[3:0][2] via $pmux\n1 -> $0\\AN[3:0][3] via $pmux\n1 -> $0\\AN[3:0][0] via $pmux\n1 -> $0\\AN[3:0][1] via $pmux\n1 -> $0\\AN[3:0][2] via $pmux\n1 -> $0\\AN[3:0][3] via $pmux\n1 -> $0\\AN[3:0][0] via $pmux\n1 -> $0\\AN[3:0][1] via $pmux", "tags": ["$adff", "$eq", "$logic_not", "$pmux", "combinational", "datapath", "fsm", "graph", "interface", "sequential"], "metadata": {"source_doc_id": "merged-99-ec95fee304d50e83", "module": "anode_driver", "node_count": 36, "edge_count": 270, "operations": {"$adff": 2, "$eq": 3, "$logic_not": 1, "$pmux": 2}, "source": "datapath_graph"}}
+------code------
+module anode_driver
+ports output AN[4] output S[2] input clk[1] input clk_en[1] input clr[1]
+operations $adff:2 $eq:3 $logic_not:1 $pmux:2
+dependencies
+clr -> S[0] via $adff
+clr -> S[1] via $adff
+clk_en -> S[0] via $adff
+clk_en -> S[1] via $adff
+$0\S[1:0][0] -> S[0] via $adff
+$0\S[1:0][0] -> S[1] via $adff
+$0\S[1:0][1] -> S[0] via $adff
+$0\S[1:0][1] -> S[1] via $adff
+clr -> AN[0] via $adff
+clr -> AN[1] via $adff
+clr -> AN[2] via $adff
+clr -> AN[3] via $adff
+clk_en -> AN[0] via $adff
+clk_en -> AN[1] via $adff
+clk_en -> AN[2] via $adff
+clk_en -> AN[3] via $adff
+$0\AN[3:0][0] -> AN[0] via $adff
+$0\AN[3:0][0] -> AN[1] via $adff
+$0\AN[3:0][0] -> AN[2] via $adff
+$0\AN[3:0][0] -> AN[3] via $adff
+$0\AN[3:0][1] -> AN[0] via $adff
+$0\AN[3:0][1] -> AN[1] via $adff
+$0\AN[3:0][1] -> AN[2] via $adff
+$0\AN[3:0][1] -> AN[3] via $adff
+$0\AN[3:0][2] -> AN[0] via $adff
+$0\AN[3:0][2] -> AN[1] via $adff
+$0\AN[3:0][2] -> AN[2] via $adff
+$0\AN[3:0][2] -> AN[3] via $adff
+$0\AN[3:0][3] -> AN[0] via $adff
+$0\AN[3:0][3] -> AN[1] via $adff
+$0\AN[3:0][3] -> AN[2] via $adff
+$0\AN[3:0][3] -> AN[3] via $adff
+S[0] -> $procmux$10_CMP via $eq
+S[1] -> $procmux$10_CMP via $eq
+1 -> $procmux$10_CMP via $eq
+0 -> $procmux$10_CMP via $eq
+S[0] -> $procmux$11_CMP via $logic_not
+S[1] -> $procmux$11_CMP via $logic_not
+x -> $0\AN[3:0][0] via $pmux
+x -> $0\AN[3:0][1] via $pmux
+x -> $0\AN[3:0][2] via $pmux
+x -> $0\AN[3:0][3] via $pmux
+x -> $0\AN[3:0][0] via $pmux
+x -> $0\AN[3:0][1] via $pmux
+x -> $0\AN[3:0][2] via $pmux
+x -> $0\AN[3:0][3] via $pmux
+x -> $0\AN[3:0][0] via $pmux
+x -> $0\AN[3:0][1] via $pmux
+x -> $0\AN[3:0][2] via $pmux
+x -> $0\AN[3:0][3] via $pmux
+x -> $0\AN[3:0][0] via $pmux
+x -> $0\AN[3:0][1] via $pmux
+x -> $0\AN[3:0][2] via $pmux
+x -> $0\AN[3:0][3] via $pmux
+0 -> $0\AN[3:0][0] via $pmux
+0 -> $0\AN[3:0][1] via $pmux
+0 -> $0\AN[3:0][2] via $pmux
+0 -> $0\AN[3:0][3] via $pmux
+1 -> $0\AN[3:0][0] via $pmux
+1 -> $0\AN[3:0][1] via $pmux
+1 -> $0\AN[3:0][2] via $pmux
+1 -> $0\AN[3:0][3] via $pmux
+1 -> $0\AN[3:0][0] via $pmux
+1 -> $0\AN[3:0][1] via $pmux
+1 -> $0\AN[3:0][2] via $pmux
+1 -> $0\AN[3:0][3] via $pmux
+1 -> $0\AN[3:0][0] via $pmux
+1 -> $0\AN[3:0][1] via $pmux
+1 -> $0\AN[3:0][2] via $pmux
+1 -> $0\AN[3:0][3] via $pmux
+1 -> $0\AN[3:0][0] via $pmux
+1 -> $0\AN[3:0][1] via $pmux
+1 -> $0\AN[3:0][2] via $pmux
+1 -> $0\AN[3:0][3] via $pmux
+1 -> $0\AN[3:0][0] via $pmux
+1 -> $0\AN[3:0][1] via $pmux
+1 -> $0\AN[3:0][2] via $pmux
+1 -> $0\AN[3:0][3] via $pmux
+1 -> $0\AN[3:0][0] via $pmux
+1 -> $0\AN[3:0][1] via $pmux
+========datapath========
+
+------nodes------
+
+{'node_id': 'module', 'kind': 'module', 'label': 'anode_driver', 'width': 1, 'attrs': {'source_doc_id': 'merged-99-ec95fee304d50e83'}}
+{'node_id': 'port:AN', 'kind': 'port', 'label': 'AN', 'width': 4, 'attrs': {'direction': 'output'}}
+{'node_id': 'net:5', 'kind': 'net', 'label': 'AN[0]', 'width': 1, 'attrs': {}}
+{'node_id': 'net:6', 'kind': 'net', 'label': 'AN[1]', 'width': 1, 'attrs': {}}
+{'node_id': 'net:7', 'kind': 'net', 'label': 'AN[2]', 'width': 1, 'attrs': {}}
+{'node_id': 'net:8', 'kind': 'net', 'label': 'AN[3]', 'width': 1, 'attrs': {}}
+{'node_id': 'port:S', 'kind': 'port', 'label': 'S', 'width': 2, 'attrs': {'direction': 'output'}}
+{'node_id': 'net:9', 'kind': 'net', 'label': 'S[0]', 'width': 1, 'attrs': {}}
+{'node_id': 'net:10', 'kind': 'net', 'label': 'S[1]', 'width': 1, 'attrs': {}}
+{'node_id': 'port:clk', 'kind': 'port', 'label': 'clk', 'width': 1, 'attrs': {'direction': 'input'}}
+{'node_id': 'net:3', 'kind': 'net', 'label': 'clk', 'width': 1, 'attrs': {}}
+{'node_id': 'port:clk_en', 'kind': 'port', 'label': 'clk_en', 'width': 1, 'attrs': {'direction': 'input'}}
+{'node_id': 'net:2', 'kind': 'net', 'label': 'clk_en', 'width': 1, 'attrs': {}}
+{'node_id': 'port:clr', 'kind': 'port', 'label': 'clr', 'width': 1, 'attrs': {'direction': 'input'}}
+{'node_id': 'net:4', 'kind': 'net', 'label': 'clr', 'width': 1, 'attrs': {}}
+{'node_id': 'cell:0:$procdff$14', 'kind': 'cell', 'label': '$procdff$14', 'width': 1, 'attrs': {'type': '$adff', 'parameters': {'ARST_POLARITY': '1', 'ARST_VALUE': '00', 'CLK_POLARITY': '1', 'WIDTH': '00000000000000000000000000000010'}}}
+{'node_id': 'net:11', 'kind': 'net', 'label': '$0\\S[1:0][0]', 'width': 1, 'attrs': {}}
+{'node_id': 'net:12', 'kind': 'net', 'label': '$0\\S[1:0][1]', 'width': 1, 'attrs': {}}
+{'node_id': 'cell:1:$procdff$17', 'kind': 'cell', 'label': '$procdff$17', 'width': 1, 'attrs': {'type': '$adff', 'parameters': {'ARST_POLARITY': '1', 'ARST_VALUE': '1110', 'CLK_POLARITY': '1', 'WIDTH': '00000000000000000000000000000100'}}}
+{'node_id': 'net:13', 'kind': 'net', 'label': '$0\\AN[3:0][0]', 'width': 1, 'attrs': {}}
+{'node_id': 'net:14', 'kind': 'net', 'label': '$0\\AN[3:0][1]', 'width': 1, 'attrs': {}}
+{'node_id': 'net:15', 'kind': 'net', 'label': '$0\\AN[3:0][2]', 'width': 1, 'attrs': {}}
+{'node_id': 'net:16', 'kind': 'net', 'label': '$0\\AN[3:0][3]', 'width': 1, 'attrs': {}}
+{'node_id': 'cell:2:$procmux$10_CMP0', 'kind': 'cell', 'label': '$procmux$10_CMP0', 'width': 1, 'attrs': {'type': '$eq', 'parameters': {'A_SIGNED': '00000000000000000000000000000000', 'A_WIDTH': '00000000000000000000000000000010', 'B_SIGNED': '00000000000000000000000000000000', 'B_WIDTH': '00000000000000000000000000000010', 'Y_WIDTH': '00000000000000000000000000000001'}}}
+{'node_id': 'net:const:1', 'kind': 'net', 'label': '1', 'width': 1, 'attrs': {}}
+{'node_id': 'net:const:0', 'kind': 'net', 'label': '0', 'width': 1, 'attrs': {}}
+{'node_id': 'net:17', 'kind': 'net', 'label': '$procmux$10_CMP', 'width': 1, 'attrs': {}}
+{'node_id': 'cell:3:$procmux$11_CMP0', 'kind': 'cell', 'label': '$procmux$11_CMP0', 'width': 1, 'attrs': {'type': '$logic_not', 'parameters': {'A_SIGNED': '00000000000000000000000000000000', 'A_WIDTH': '00000000000000000000000000000010', 'Y_WIDTH': '00000000000000000000000000000001'}}}
+{'node_id': 'net:18', 'kind': 'net', 'label': '$procmux$11_CMP', 'width': 1, 'attrs': {}}
+{'node_id': 'cell:4:$procmux$2', 'kind': 'cell', 'label': '$procmux$2', 'width': 1, 'attrs': {'type': '$pmux', 'parameters': {'S_WIDTH': '00000000000000000000000000000100', 'WIDTH': '00000000000000000000000000000100'}}}
+{'node_id': 'net:const:x', 'kind': 'net', 'label': 'x', 'width': 1, 'attrs': {}}
+{'node_id': 'net:19', 'kind': 'net', 'label': '$procmux$3_CMP', 'width': 1, 'attrs': {}}
+{'node_id': 'net:20', 'kind': 'net', 'label': '$procmux$4_CMP', 'width': 1, 'attrs': {}}
+{'node_id': 'cell:5:$procmux$7', 'kind': 'cell', 'label': '$procmux$7', 'width': 1, 'attrs': {'type': '$pmux', 'parameters': {'S_WIDTH': '00000000000000000000000000000100', 'WIDTH': '00000000000000000000000000000010'}}}
+{'node_id': 'cell:6:$procmux$8_CMP0', 'kind': 'cell', 'label': '$procmux$8_CMP0', 'width': 1, 'attrs': {'type': '$eq', 'parameters': {'A_SIGNED': '00000000000000000000000000000000', 'A_WIDTH': '00000000000000000000000000000010', 'B_SIGNED': '00000000000000000000000000000000', 'B_WIDTH': '00000000000000000000000000000010', 'Y_WIDTH': '00000000000000000000000000000001'}}}
+{'node_id': 'cell:7:$procmux$9_CMP0', 'kind': 'cell', 'label': '$procmux$9_CMP0', 'width': 1, 'attrs': {'type': '$eq', 'parameters': {'A_SIGNED': '00000000000000000000000000000000', 'A_WIDTH': '00000000000000000000000000000010', 'B_SIGNED': '00000000000000000000000000000000', 'B_WIDTH': '00000000000000000000000000000010', 'Y_WIDTH': '00000000000000000000000000000001'}}}
+
+------edges------
+{'source': 'module', 'target': 'port:AN', 'kind': 'has_port', 'width': 4, 'attrs': {}}
+{'source': 'net:5', 'target': 'port:AN', 'kind': 'net_drives_port', 'width': 1, 'attrs': {}}
+{'source': 'net:6', 'target': 'port:AN', 'kind': 'net_drives_port', 'width': 1, 'attrs': {}}
+{'source': 'net:7', 'target': 'port:AN', 'kind': 'net_drives_port', 'width': 1, 'attrs': {}}
+{'source': 'net:8', 'target': 'port:AN', 'kind': 'net_drives_port', 'width': 1, 'attrs': {}}
+{'source': 'module', 'target': 'port:S', 'kind': 'has_port', 'width': 2, 'attrs': {}}
+{'source': 'net:9', 'target': 'port:S', 'kind': 'net_drives_port', 'width': 1, 'attrs': {}}
+{'source': 'net:10', 'target': 'port:S', 'kind': 'net_drives_port', 'width': 1, 'attrs': {}}
+{'source': 'module', 'target': 'port:clk', 'kind': 'has_port', 'width': 1, 'attrs': {}}
+{'source': 'port:clk', 'target': 'net:3', 'kind': 'port_drives_net', 'width': 1, 'attrs': {}}
+{'source': 'module', 'target': 'port:clk_en', 'kind': 'has_port', 'width': 1, 'attrs': {}}
+{'source': 'port:clk_en', 'target': 'net:2', 'kind': 'port_drives_net', 'width': 1, 'attrs': {}}
+{'source': 'module', 'target': 'port:clr', 'kind': 'has_port', 'width': 1, 'attrs': {}}
+{'source': 'port:clr', 'target': 'net:4', 'kind': 'port_drives_net', 'width': 1, 'attrs': {}}
+{'source': 'module', 'target': 'cell:0:$procdff$14', 'kind': 'has_cell', 'width': 1, 'attrs': {'cell_type': '$adff'}}
+{'source': 'net:4', 'target': 'cell:0:$procdff$14', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'ARST', 'cell_type': '$adff'}}
+{'source': 'net:2', 'target': 'cell:0:$procdff$14', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'CLK', 'cell_type': '$adff'}}
+{'source': 'net:11', 'target': 'cell:0:$procdff$14', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'D', 'cell_type': '$adff'}}
+{'source': 'net:12', 'target': 'cell:0:$procdff$14', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'D', 'cell_type': '$adff'}}
+{'source': 'cell:0:$procdff$14', 'target': 'net:9', 'kind': 'cell_output', 'width': 1, 'attrs': {'port': 'Q', 'cell_type': '$adff'}}
+{'source': 'cell:0:$procdff$14', 'target': 'net:10', 'kind': 'cell_output', 'width': 1, 'attrs': {'port': 'Q', 'cell_type': '$adff'}}
+{'source': 'net:4', 'target': 'net:9', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$14', 'cell_type': '$adff', 'source_signal': 'clr', 'target_signal': 'S[0]'}}
+{'source': 'net:4', 'target': 'net:10', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$14', 'cell_type': '$adff', 'source_signal': 'clr', 'target_signal': 'S[1]'}}
+{'source': 'net:2', 'target': 'net:9', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$14', 'cell_type': '$adff', 'source_signal': 'clk_en', 'target_signal': 'S[0]'}}
+{'source': 'net:2', 'target': 'net:10', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$14', 'cell_type': '$adff', 'source_signal': 'clk_en', 'target_signal': 'S[1]'}}
+{'source': 'net:11', 'target': 'net:9', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$14', 'cell_type': '$adff', 'source_signal': '$0\\S[1:0][0]', 'target_signal': 'S[0]'}}
+{'source': 'net:11', 'target': 'net:10', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$14', 'cell_type': '$adff', 'source_signal': '$0\\S[1:0][0]', 'target_signal': 'S[1]'}}
+{'source': 'net:12', 'target': 'net:9', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$14', 'cell_type': '$adff', 'source_signal': '$0\\S[1:0][1]', 'target_signal': 'S[0]'}}
+{'source': 'net:12', 'target': 'net:10', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$14', 'cell_type': '$adff', 'source_signal': '$0\\S[1:0][1]', 'target_signal': 'S[1]'}}
+{'source': 'module', 'target': 'cell:1:$procdff$17', 'kind': 'has_cell', 'width': 1, 'attrs': {'cell_type': '$adff'}}
+{'source': 'net:4', 'target': 'cell:1:$procdff$17', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'ARST', 'cell_type': '$adff'}}
+{'source': 'net:2', 'target': 'cell:1:$procdff$17', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'CLK', 'cell_type': '$adff'}}
+{'source': 'net:13', 'target': 'cell:1:$procdff$17', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'D', 'cell_type': '$adff'}}
+{'source': 'net:14', 'target': 'cell:1:$procdff$17', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'D', 'cell_type': '$adff'}}
+{'source': 'net:15', 'target': 'cell:1:$procdff$17', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'D', 'cell_type': '$adff'}}
+{'source': 'net:16', 'target': 'cell:1:$procdff$17', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'D', 'cell_type': '$adff'}}
+{'source': 'cell:1:$procdff$17', 'target': 'net:5', 'kind': 'cell_output', 'width': 1, 'attrs': {'port': 'Q', 'cell_type': '$adff'}}
+{'source': 'cell:1:$procdff$17', 'target': 'net:6', 'kind': 'cell_output', 'width': 1, 'attrs': {'port': 'Q', 'cell_type': '$adff'}}
+{'source': 'cell:1:$procdff$17', 'target': 'net:7', 'kind': 'cell_output', 'width': 1, 'attrs': {'port': 'Q', 'cell_type': '$adff'}}
+{'source': 'cell:1:$procdff$17', 'target': 'net:8', 'kind': 'cell_output', 'width': 1, 'attrs': {'port': 'Q', 'cell_type': '$adff'}}
+{'source': 'net:4', 'target': 'net:5', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': 'clr', 'target_signal': 'AN[0]'}}
+{'source': 'net:4', 'target': 'net:6', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': 'clr', 'target_signal': 'AN[1]'}}
+{'source': 'net:4', 'target': 'net:7', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': 'clr', 'target_signal': 'AN[2]'}}
+{'source': 'net:4', 'target': 'net:8', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': 'clr', 'target_signal': 'AN[3]'}}
+{'source': 'net:2', 'target': 'net:5', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': 'clk_en', 'target_signal': 'AN[0]'}}
+{'source': 'net:2', 'target': 'net:6', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': 'clk_en', 'target_signal': 'AN[1]'}}
+{'source': 'net:2', 'target': 'net:7', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': 'clk_en', 'target_signal': 'AN[2]'}}
+{'source': 'net:2', 'target': 'net:8', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': 'clk_en', 'target_signal': 'AN[3]'}}
+{'source': 'net:13', 'target': 'net:5', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': '$0\\AN[3:0][0]', 'target_signal': 'AN[0]'}}
+{'source': 'net:13', 'target': 'net:6', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': '$0\\AN[3:0][0]', 'target_signal': 'AN[1]'}}
+{'source': 'net:13', 'target': 'net:7', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': '$0\\AN[3:0][0]', 'target_signal': 'AN[2]'}}
+{'source': 'net:13', 'target': 'net:8', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': '$0\\AN[3:0][0]', 'target_signal': 'AN[3]'}}
+{'source': 'net:14', 'target': 'net:5', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': '$0\\AN[3:0][1]', 'target_signal': 'AN[0]'}}
+{'source': 'net:14', 'target': 'net:6', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': '$0\\AN[3:0][1]', 'target_signal': 'AN[1]'}}
+{'source': 'net:14', 'target': 'net:7', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': '$0\\AN[3:0][1]', 'target_signal': 'AN[2]'}}
+{'source': 'net:14', 'target': 'net:8', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': '$0\\AN[3:0][1]', 'target_signal': 'AN[3]'}}
+{'source': 'net:15', 'target': 'net:5', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': '$0\\AN[3:0][2]', 'target_signal': 'AN[0]'}}
+{'source': 'net:15', 'target': 'net:6', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': '$0\\AN[3:0][2]', 'target_signal': 'AN[1]'}}
+{'source': 'net:15', 'target': 'net:7', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': '$0\\AN[3:0][2]', 'target_signal': 'AN[2]'}}
+{'source': 'net:15', 'target': 'net:8', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': '$0\\AN[3:0][2]', 'target_signal': 'AN[3]'}}
+{'source': 'net:16', 'target': 'net:5', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': '$0\\AN[3:0][3]', 'target_signal': 'AN[0]'}}
+{'source': 'net:16', 'target': 'net:6', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': '$0\\AN[3:0][3]', 'target_signal': 'AN[1]'}}
+{'source': 'net:16', 'target': 'net:7', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': '$0\\AN[3:0][3]', 'target_signal': 'AN[2]'}}
+{'source': 'net:16', 'target': 'net:8', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procdff$17', 'cell_type': '$adff', 'source_signal': '$0\\AN[3:0][3]', 'target_signal': 'AN[3]'}}
+{'source': 'module', 'target': 'cell:2:$procmux$10_CMP0', 'kind': 'has_cell', 'width': 1, 'attrs': {'cell_type': '$eq'}}
+{'source': 'net:9', 'target': 'cell:2:$procmux$10_CMP0', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'A', 'cell_type': '$eq'}}
+{'source': 'net:10', 'target': 'cell:2:$procmux$10_CMP0', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'A', 'cell_type': '$eq'}}
+{'source': 'net:const:1', 'target': 'cell:2:$procmux$10_CMP0', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$eq'}}
+{'source': 'net:const:0', 'target': 'cell:2:$procmux$10_CMP0', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$eq'}}
+{'source': 'cell:2:$procmux$10_CMP0', 'target': 'net:17', 'kind': 'cell_output', 'width': 1, 'attrs': {'port': 'Y', 'cell_type': '$eq'}}
+{'source': 'net:9', 'target': 'net:17', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$10_CMP0', 'cell_type': '$eq', 'source_signal': 'S[0]', 'target_signal': '$procmux$10_CMP'}}
+{'source': 'net:10', 'target': 'net:17', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$10_CMP0', 'cell_type': '$eq', 'source_signal': 'S[1]', 'target_signal': '$procmux$10_CMP'}}
+{'source': 'net:const:1', 'target': 'net:17', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$10_CMP0', 'cell_type': '$eq', 'source_signal': '1', 'target_signal': '$procmux$10_CMP'}}
+{'source': 'net:const:0', 'target': 'net:17', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$10_CMP0', 'cell_type': '$eq', 'source_signal': '0', 'target_signal': '$procmux$10_CMP'}}
+{'source': 'module', 'target': 'cell:3:$procmux$11_CMP0', 'kind': 'has_cell', 'width': 1, 'attrs': {'cell_type': '$logic_not'}}
+{'source': 'net:9', 'target': 'cell:3:$procmux$11_CMP0', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'A', 'cell_type': '$logic_not'}}
+{'source': 'net:10', 'target': 'cell:3:$procmux$11_CMP0', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'A', 'cell_type': '$logic_not'}}
+{'source': 'cell:3:$procmux$11_CMP0', 'target': 'net:18', 'kind': 'cell_output', 'width': 1, 'attrs': {'port': 'Y', 'cell_type': '$logic_not'}}
+{'source': 'net:9', 'target': 'net:18', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$11_CMP0', 'cell_type': '$logic_not', 'source_signal': 'S[0]', 'target_signal': '$procmux$11_CMP'}}
+{'source': 'net:10', 'target': 'net:18', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$11_CMP0', 'cell_type': '$logic_not', 'source_signal': 'S[1]', 'target_signal': '$procmux$11_CMP'}}
+{'source': 'module', 'target': 'cell:4:$procmux$2', 'kind': 'has_cell', 'width': 1, 'attrs': {'cell_type': '$pmux'}}
+{'source': 'net:const:x', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'A', 'cell_type': '$pmux'}}
+{'source': 'net:const:x', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'A', 'cell_type': '$pmux'}}
+{'source': 'net:const:x', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'A', 'cell_type': '$pmux'}}
+{'source': 'net:const:x', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'A', 'cell_type': '$pmux'}}
+{'source': 'net:const:0', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:1', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:1', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:1', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:1', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:1', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:1', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:0', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:1', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:1', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:0', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:1', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:1', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:0', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:1', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:1', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:19', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'S', 'cell_type': '$pmux'}}
+{'source': 'net:20', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'S', 'cell_type': '$pmux'}}
+{'source': 'net:17', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'S', 'cell_type': '$pmux'}}
+{'source': 'net:18', 'target': 'cell:4:$procmux$2', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'S', 'cell_type': '$pmux'}}
+{'source': 'cell:4:$procmux$2', 'target': 'net:13', 'kind': 'cell_output', 'width': 1, 'attrs': {'port': 'Y', 'cell_type': '$pmux'}}
+{'source': 'cell:4:$procmux$2', 'target': 'net:14', 'kind': 'cell_output', 'width': 1, 'attrs': {'port': 'Y', 'cell_type': '$pmux'}}
+{'source': 'cell:4:$procmux$2', 'target': 'net:15', 'kind': 'cell_output', 'width': 1, 'attrs': {'port': 'Y', 'cell_type': '$pmux'}}
+{'source': 'cell:4:$procmux$2', 'target': 'net:16', 'kind': 'cell_output', 'width': 1, 'attrs': {'port': 'Y', 'cell_type': '$pmux'}}
+{'source': 'net:const:x', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:x', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:x', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:x', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:x', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:x', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:x', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:x', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:x', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:x', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:x', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:x', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:x', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:x', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:x', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:x', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:0', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:0', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:0', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:0', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:1', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:1', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:1', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:1', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:1', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:1', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:1', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:1', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:1', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:1', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:1', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:1', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:1', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:1', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:1', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:1', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:1', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:1', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:1', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:1', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:1', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:1', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:1', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:1', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:0', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:0', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:0', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:0', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:1', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:1', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:1', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:1', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:1', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:1', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:1', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:1', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:0', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:0', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:0', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:0', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:1', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:1', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:1', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:1', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:1', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:1', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:1', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:1', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:0', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:0', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:0', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:0', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:1', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:1', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:1', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:1', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:const:1', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:const:1', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:const:1', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:const:1', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:19', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '$procmux$3_CMP', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:19', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '$procmux$3_CMP', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:19', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '$procmux$3_CMP', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:19', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '$procmux$3_CMP', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:20', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '$procmux$4_CMP', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:20', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '$procmux$4_CMP', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:20', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '$procmux$4_CMP', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:20', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '$procmux$4_CMP', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:17', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '$procmux$10_CMP', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:17', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '$procmux$10_CMP', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:17', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '$procmux$10_CMP', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:17', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '$procmux$10_CMP', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'net:18', 'target': 'net:13', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '$procmux$11_CMP', 'target_signal': '$0\\AN[3:0][0]'}}
+{'source': 'net:18', 'target': 'net:14', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '$procmux$11_CMP', 'target_signal': '$0\\AN[3:0][1]'}}
+{'source': 'net:18', 'target': 'net:15', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '$procmux$11_CMP', 'target_signal': '$0\\AN[3:0][2]'}}
+{'source': 'net:18', 'target': 'net:16', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$2', 'cell_type': '$pmux', 'source_signal': '$procmux$11_CMP', 'target_signal': '$0\\AN[3:0][3]'}}
+{'source': 'module', 'target': 'cell:5:$procmux$7', 'kind': 'has_cell', 'width': 1, 'attrs': {'cell_type': '$pmux'}}
+{'source': 'net:const:x', 'target': 'cell:5:$procmux$7', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'A', 'cell_type': '$pmux'}}
+{'source': 'net:const:x', 'target': 'cell:5:$procmux$7', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'A', 'cell_type': '$pmux'}}
+{'source': 'net:const:0', 'target': 'cell:5:$procmux$7', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:0', 'target': 'cell:5:$procmux$7', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:1', 'target': 'cell:5:$procmux$7', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:1', 'target': 'cell:5:$procmux$7', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:0', 'target': 'cell:5:$procmux$7', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:1', 'target': 'cell:5:$procmux$7', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:1', 'target': 'cell:5:$procmux$7', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:const:0', 'target': 'cell:5:$procmux$7', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$pmux'}}
+{'source': 'net:19', 'target': 'cell:5:$procmux$7', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'S', 'cell_type': '$pmux'}}
+{'source': 'net:20', 'target': 'cell:5:$procmux$7', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'S', 'cell_type': '$pmux'}}
+{'source': 'net:17', 'target': 'cell:5:$procmux$7', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'S', 'cell_type': '$pmux'}}
+{'source': 'net:18', 'target': 'cell:5:$procmux$7', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'S', 'cell_type': '$pmux'}}
+{'source': 'cell:5:$procmux$7', 'target': 'net:11', 'kind': 'cell_output', 'width': 1, 'attrs': {'port': 'Y', 'cell_type': '$pmux'}}
+{'source': 'cell:5:$procmux$7', 'target': 'net:12', 'kind': 'cell_output', 'width': 1, 'attrs': {'port': 'Y', 'cell_type': '$pmux'}}
+{'source': 'net:const:x', 'target': 'net:11', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\S[1:0][0]'}}
+{'source': 'net:const:x', 'target': 'net:12', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\S[1:0][1]'}}
+{'source': 'net:const:x', 'target': 'net:11', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\S[1:0][0]'}}
+{'source': 'net:const:x', 'target': 'net:12', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': 'x', 'target_signal': '$0\\S[1:0][1]'}}
+{'source': 'net:const:0', 'target': 'net:11', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\S[1:0][0]'}}
+{'source': 'net:const:0', 'target': 'net:12', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\S[1:0][1]'}}
+{'source': 'net:const:0', 'target': 'net:11', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\S[1:0][0]'}}
+{'source': 'net:const:0', 'target': 'net:12', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\S[1:0][1]'}}
+{'source': 'net:const:1', 'target': 'net:11', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\S[1:0][0]'}}
+{'source': 'net:const:1', 'target': 'net:12', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\S[1:0][1]'}}
+{'source': 'net:const:1', 'target': 'net:11', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\S[1:0][0]'}}
+{'source': 'net:const:1', 'target': 'net:12', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\S[1:0][1]'}}
+{'source': 'net:const:0', 'target': 'net:11', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\S[1:0][0]'}}
+{'source': 'net:const:0', 'target': 'net:12', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\S[1:0][1]'}}
+{'source': 'net:const:1', 'target': 'net:11', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\S[1:0][0]'}}
+{'source': 'net:const:1', 'target': 'net:12', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\S[1:0][1]'}}
+{'source': 'net:const:1', 'target': 'net:11', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\S[1:0][0]'}}
+{'source': 'net:const:1', 'target': 'net:12', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '1', 'target_signal': '$0\\S[1:0][1]'}}
+{'source': 'net:const:0', 'target': 'net:11', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\S[1:0][0]'}}
+{'source': 'net:const:0', 'target': 'net:12', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '0', 'target_signal': '$0\\S[1:0][1]'}}
+{'source': 'net:19', 'target': 'net:11', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '$procmux$3_CMP', 'target_signal': '$0\\S[1:0][0]'}}
+{'source': 'net:19', 'target': 'net:12', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '$procmux$3_CMP', 'target_signal': '$0\\S[1:0][1]'}}
+{'source': 'net:20', 'target': 'net:11', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '$procmux$4_CMP', 'target_signal': '$0\\S[1:0][0]'}}
+{'source': 'net:20', 'target': 'net:12', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '$procmux$4_CMP', 'target_signal': '$0\\S[1:0][1]'}}
+{'source': 'net:17', 'target': 'net:11', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '$procmux$10_CMP', 'target_signal': '$0\\S[1:0][0]'}}
+{'source': 'net:17', 'target': 'net:12', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '$procmux$10_CMP', 'target_signal': '$0\\S[1:0][1]'}}
+{'source': 'net:18', 'target': 'net:11', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '$procmux$11_CMP', 'target_signal': '$0\\S[1:0][0]'}}
+{'source': 'net:18', 'target': 'net:12', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$7', 'cell_type': '$pmux', 'source_signal': '$procmux$11_CMP', 'target_signal': '$0\\S[1:0][1]'}}
+{'source': 'module', 'target': 'cell:6:$procmux$8_CMP0', 'kind': 'has_cell', 'width': 1, 'attrs': {'cell_type': '$eq'}}
+{'source': 'net:9', 'target': 'cell:6:$procmux$8_CMP0', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'A', 'cell_type': '$eq'}}
+{'source': 'net:10', 'target': 'cell:6:$procmux$8_CMP0', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'A', 'cell_type': '$eq'}}
+{'source': 'net:const:1', 'target': 'cell:6:$procmux$8_CMP0', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$eq'}}
+{'source': 'net:const:1', 'target': 'cell:6:$procmux$8_CMP0', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$eq'}}
+{'source': 'cell:6:$procmux$8_CMP0', 'target': 'net:19', 'kind': 'cell_output', 'width': 1, 'attrs': {'port': 'Y', 'cell_type': '$eq'}}
+{'source': 'net:9', 'target': 'net:19', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$8_CMP0', 'cell_type': '$eq', 'source_signal': 'S[0]', 'target_signal': '$procmux$3_CMP'}}
+{'source': 'net:10', 'target': 'net:19', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$8_CMP0', 'cell_type': '$eq', 'source_signal': 'S[1]', 'target_signal': '$procmux$3_CMP'}}
+{'source': 'net:const:1', 'target': 'net:19', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$8_CMP0', 'cell_type': '$eq', 'source_signal': '1', 'target_signal': '$procmux$3_CMP'}}
+{'source': 'net:const:1', 'target': 'net:19', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$8_CMP0', 'cell_type': '$eq', 'source_signal': '1', 'target_signal': '$procmux$3_CMP'}}
+{'source': 'module', 'target': 'cell:7:$procmux$9_CMP0', 'kind': 'has_cell', 'width': 1, 'attrs': {'cell_type': '$eq'}}
+{'source': 'net:9', 'target': 'cell:7:$procmux$9_CMP0', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'A', 'cell_type': '$eq'}}
+{'source': 'net:10', 'target': 'cell:7:$procmux$9_CMP0', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'A', 'cell_type': '$eq'}}
+{'source': 'net:const:0', 'target': 'cell:7:$procmux$9_CMP0', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$eq'}}
+{'source': 'net:const:1', 'target': 'cell:7:$procmux$9_CMP0', 'kind': 'cell_input', 'width': 1, 'attrs': {'port': 'B', 'cell_type': '$eq'}}
+{'source': 'cell:7:$procmux$9_CMP0', 'target': 'net:20', 'kind': 'cell_output', 'width': 1, 'attrs': {'port': 'Y', 'cell_type': '$eq'}}
+{'source': 'net:9', 'target': 'net:20', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$9_CMP0', 'cell_type': '$eq', 'source_signal': 'S[0]', 'target_signal': '$procmux$4_CMP'}}
+{'source': 'net:10', 'target': 'net:20', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$9_CMP0', 'cell_type': '$eq', 'source_signal': 'S[1]', 'target_signal': '$procmux$4_CMP'}}
+{'source': 'net:const:0', 'target': 'net:20', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$9_CMP0', 'cell_type': '$eq', 'source_signal': '0', 'target_signal': '$procmux$4_CMP'}}
+{'source': 'net:const:1', 'target': 'net:20', 'kind': 'dependency', 'width': 1, 'attrs': {'cell': '$procmux$9_CMP0', 'cell_type': '$eq', 'source_signal': '1', 'target_signal': '$procmux$4_CMP'}}
+
+------ operations ------
+{'$adff': 2, '$eq': 3, '$logic_not': 1, '$pmux': 2}
+
+------ metadata ------
+{'source': 'merged.jsonl', 'row': 99}

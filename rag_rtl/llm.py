@@ -6,15 +6,46 @@ import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from .json_utils import preview_text
+
+FINAL_RTL_RE = re.compile(r"<final_rtl>\s*(.*?)\s*</final_rtl>", re.IGNORECASE | re.DOTALL)
 CODE_RE = re.compile(r"```(?:verilog|systemverilog|sv)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
+KEYWORD_PROMPT_MARKER = "You are a Verilog specification keyword extraction assistant."
+KEYWORD_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\d+")
+KEYWORD_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "be",
+    "build",
+    "code",
+    "create",
+    "for",
+    "from",
+    "hdl",
+    "in",
+    "input",
+    "make",
+    "module",
+    "of",
+    "output",
+    "rtl",
+    "that",
+    "the",
+    "to",
+    "verilog",
+    "with",
+}
+PLACEHOLDER_RTL = {"...", "...code...", "code...", "...rtl...", "...hdl..."}
 
 
 @dataclass
 class VllmClient:
     base_url: str = "http://localhost:8000/v1"
-    model: str = "local-rtl-model"
+    model: str = "siliconmind-server"
     timeout_s: int = 120
     api_key: str = "EMPTY"
 
@@ -22,17 +53,131 @@ class VllmClient:
     def from_env(cls) -> "VllmClient":
         return cls(
             base_url=os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1"),
-            model=os.getenv("VLLM_MODEL", "local-rtl-model"),
+            model=os.getenv("VLLM_MODEL", "siliconmind-server"),
             api_key=os.getenv("VLLM_API_KEY", "EMPTY"),
         )
 
-    def complete(self, prompt: str, temperature: float = 0.1, max_tokens: int = 2048) -> str:
+    def chat(
+        self,
+        messages: Sequence[Dict[str, Any]],
+        temperature: float = 0.1,
+        max_tokens: int = 2048,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
+        parallel_tool_calls: Optional[bool] = None,
+    ) -> Dict[str, Any]:
         payload = {
             "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": list(messages),
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if tools is not None:
+            payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+        if parallel_tool_calls is not None:
+            payload["parallel_tool_calls"] = parallel_tool_calls
+        body = self._post_chat_completion(payload)
+        return body["choices"][0]["message"]
+
+    def complete(self, prompt: str, temperature: float = 0.1, max_tokens: int = 2048) -> str:
+        message = self.chat(
+            [{"role": "user", "content": prompt}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return message.get("content") or ""
+
+    def complete_with_tools(
+        self,
+        prompt: str,
+        tools: List[Dict[str, Any]],
+        tool_executor: Callable[[str, Dict[str, Any]], str],
+        temperature: float = 0.1,
+        max_tokens: int = 2048,
+        tool_choice: Any = "auto",
+        max_tool_rounds: int = 4,
+        action_recorder: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> str:
+        messages: List[Dict[str, Any]] = [{"role": "user", "content": prompt}]
+        for round_index in range(max_tool_rounds):
+            message = self.chat(
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools,
+                tool_choice=tool_choice,
+                parallel_tool_calls=False,
+            )
+            tool_calls = message.get("tool_calls") or []
+            if not tool_calls:
+                if action_recorder:
+                    content = message.get("content") or ""
+                    action_recorder(
+                        {
+                            "action": "llm_final_response",
+                            "round": round_index,
+                            "used_tools": any(item.get("role") == "tool" for item in messages),
+                            "content": content,
+                            "content_preview": preview_text(content),
+                        }
+                    )
+                return message.get("content") or ""
+            messages.append(_assistant_tool_call_message(message))
+            for index, tool_call in enumerate(tool_calls):
+                function = tool_call.get("function") or {}
+                name = function.get("name", "")
+                arguments = _parse_tool_arguments(function.get("arguments", "{}"))
+                if action_recorder:
+                    action_recorder(
+                        {
+                            "action": "llm_tool_call",
+                            "round": round_index,
+                            "tool": name,
+                            "arguments": arguments,
+                        }
+                    )
+                result = tool_executor(name, arguments)
+                if action_recorder:
+                    action_recorder(
+                        {
+                            "action": "tool_result",
+                            "round": round_index,
+                            "tool": name,
+                            "result_preview": preview_text(result),
+                        }
+                    )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.get("id") or f"tool_call_{index}",
+                        "name": name,
+                        "content": result,
+                    }
+                )
+        message = self.chat(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            tools=tools,
+            tool_choice="none",
+            parallel_tool_calls=False,
+        )
+        if action_recorder:
+            content = message.get("content") or ""
+            action_recorder(
+                {
+                    "action": "llm_final_response",
+                    "round": max_tool_rounds,
+                    "used_tools": True,
+                    "content": content,
+                    "content_preview": preview_text(content),
+                }
+            )
+        return message.get("content") or ""
+
+    def _post_chat_completion(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         data = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
             f"{self.base_url.rstrip('/')}/chat/completions",
@@ -46,9 +191,14 @@ class VllmClient:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
                 body = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"vLLM request failed: HTTP {exc.code} {exc.reason}: {_compact_error_body(body)}"
+            ) from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(f"vLLM request failed: {exc}") from exc
-        return body["choices"][0]["message"]["content"]
+        return body
 
 
 class StubLlmClient:
@@ -57,14 +207,111 @@ class StubLlmClient:
     def __init__(self, rtl: Optional[str] = None):
         self.rtl = rtl or "module stub();\nendmodule"
         self.prompts: List[str] = []
+        self.keyword_prompts: List[str] = []
+        self.tool_prompts: List[str] = []
 
     def complete(self, prompt: str, temperature: float = 0.1, max_tokens: int = 2048) -> str:
+        if KEYWORD_PROMPT_MARKER in prompt:
+            self.keyword_prompts.append(prompt)
+            text = prompt.rsplit("Specification:", 1)[-1]
+            keywords: List[str] = []
+            seen = set()
+            for token in KEYWORD_TOKEN_RE.findall(text.lower()):
+                if len(token) < 2 or token in KEYWORD_STOPWORDS or token in seen:
+                    continue
+                seen.add(token)
+                keywords.append(token)
+            return json.dumps(
+                {
+                    "direction": "design",
+                    "module_name": [],
+                    "type": "unknown",
+                    "gate_usage": [],
+                    "signals": {"input": [], "output": []},
+                    "keywords": keywords[:12],
+                }
+            )
         self.prompts.append(prompt)
-        return f"```verilog\n{self.rtl}\n```"
+        return f"<final_rtl>\n```verilog\n{self.rtl}\n```\n</final_rtl>"
+
+    def complete_with_tools(
+        self,
+        prompt: str,
+        tools: List[Dict[str, Any]],
+        tool_executor: Callable[[str, Dict[str, Any]], str],
+        temperature: float = 0.1,
+        max_tokens: int = 2048,
+        tool_choice: Any = "auto",
+        max_tool_rounds: int = 4,
+        action_recorder: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> str:
+        self.tool_prompts.append(prompt)
+        if action_recorder:
+            content = f"<final_rtl>\n```verilog\n{self.rtl}\n```\n</final_rtl>"
+            action_recorder(
+                {
+                    "action": "llm_final_response",
+                    "round": 0,
+                    "used_tools": False,
+                    "content": content,
+                    "content_preview": preview_text(content),
+                }
+            )
+        return self.complete(prompt, temperature=temperature, max_tokens=max_tokens)
 
 
 def extract_code(model_text: str) -> str:
-    match = CODE_RE.search(model_text)
-    if match:
-        return match.group(1).strip()
-    return model_text.strip()
+    final_matches = list(FINAL_RTL_RE.finditer(model_text))
+    source = _select_final_rtl_source(final_matches) or model_text
+    code_matches = list(CODE_RE.finditer(source))
+    if code_matches:
+        return code_matches[-1].group(1).strip()
+    return source.strip()
+
+
+def _select_final_rtl_source(final_matches: List[re.Match[str]]) -> Optional[str]:
+    for final_match in reversed(final_matches):
+        source = final_match.group(1).strip()
+        if not _looks_like_prompt_format_example(source):
+            return source
+    return None
+
+
+def _looks_like_prompt_format_example(source: str) -> bool:
+    lowered = source.lower()
+    if "<final_rtl" in lowered or "</final_rtl>" in lowered:
+        return True
+    code_matches = list(CODE_RE.finditer(source))
+    candidate = code_matches[-1].group(1) if code_matches else source
+    normalized = re.sub(r"\s+", "", candidate.lower())
+    return normalized in PLACEHOLDER_RTL
+
+
+def _parse_tool_arguments(arguments: Any) -> Dict[str, Any]:
+    if isinstance(arguments, dict):
+        return arguments
+    if not arguments:
+        return {}
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError:
+        return {"_raw_arguments": str(arguments)}
+    return parsed if isinstance(parsed, dict) else {"value": parsed}
+
+
+def _assistant_tool_call_message(message: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "role": "assistant",
+        "content": message.get("content"),
+        "tool_calls": message.get("tool_calls") or [],
+    }
+
+
+def _compact_error_body(body: str) -> str:
+    if not body:
+        return "<empty response body>"
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return body[:2000]
+    return json.dumps(payload, ensure_ascii=False)[:2000]
