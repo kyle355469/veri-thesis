@@ -35,6 +35,27 @@ class FailingVerifier:
         )
 
 
+class CountingVerifier:
+    def __init__(self):
+        self.calls = 0
+
+    def verify(self, rtl, top_module=None):
+        self.calls += 1
+        return VerificationReport(
+            syntax_passed=True,
+            lint_passed=True,
+            diagnostics=[Diagnostic(tool="stub", passed=True)],
+        )
+
+
+class RawTextLlm:
+    def __init__(self, text):
+        self.text = text
+
+    def complete(self, prompt, temperature=0.1, max_tokens=2048):
+        return self.text
+
+
 class DictEmbedder:
     dim = 2
 
@@ -129,6 +150,31 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(records[0]["prompt"], "Build an inverter")
             self.assertTrue(records[0]["final_attempt"])
 
+    def test_pipeline_reports_extraction_failure_without_running_verifier(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            embedder = HashingEmbedder(dim=128)
+            store = empty_store()
+            verifier = CountingVerifier()
+            pipeline = RagRtlPipeline(
+                store=store,
+                embedder=embedder,
+                llm_client=RawTextLlm("I cannot provide code for this request."),
+                verifier=verifier,
+                cache_path=tmp_path / "cache.json",
+                monitor_path=tmp_path / "monitor.jsonl",
+                failed_log_path=tmp_path / "failed.jsonl",
+                cache_mode="direct",
+            )
+
+            response = pipeline.run(RtlTask(prompt="Build an inverter", max_repair_attempts=0))
+
+            self.assertEqual(response.rtl, "")
+            self.assertEqual(verifier.calls, 0)
+            self.assertFalse(response.verification.passed)
+            self.assertEqual(response.verification.diagnostics[0].tool, "rtl_extraction")
+            self.assertIn("No RTL code was extracted", response.verification.diagnostics[0].stderr)
+
     def test_evidence_range_cache_match_is_prompt_evidence_not_reuse(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -156,7 +202,7 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(response.cache_source, "history_evidence")
             self.assertEqual(len(llm.prompts), 1)
             self.assertGreaterEqual(len(llm.keyword_prompts), 2)
-            self.assertIn("<semantic_history_evidence>", llm.prompts[0])
+            self.assertIn("### Semantic History Evidence", llm.prompts[0])
             self.assertIn("module old; endmodule", llm.prompts[0])
 
     def test_response_reports_no_best_history_match_without_keyword_candidate_and_verbose_events(self):

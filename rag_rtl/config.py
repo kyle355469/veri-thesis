@@ -22,6 +22,8 @@ class RuntimeConfig:
     monitor_path: PathLike = "runs/monitor.jsonl"
     failed_log_path: PathLike = "runs/failed_attempts.jsonl"
     verbose_generation: bool = False
+    generation_temperature: float = 0.4
+    max_tokens: int = 2048
 
 
 @dataclass(frozen=True)

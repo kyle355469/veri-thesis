@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -160,6 +161,13 @@ class DatapathIndexStats:
     failures_path: Optional[str] = None
 
 
+@dataclass
+class _DatapathExtractionResult:
+    document: RtlDocument
+    graphs: List["DatapathGraph"] = field(default_factory=list)
+    error: Optional[str] = None
+
+
 class YosysDatapathExtractor:
     def __init__(self, yosys_bin: str = "yosys", timeout_s: int = 30):
         self.yosys_bin = yosys_bin
@@ -245,27 +253,27 @@ def build_datapath_vector_db(
     output: str | Path,
     yosys_bin: str = "yosys",
     timeout_s: int = 30,
+    jobs: int = 1,
 ) -> DatapathIndexStats:
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     datapaths_path = output / "datapaths.jsonl"
     failures_path = output / "failures.jsonl"
-    extractor = YosysDatapathExtractor(yosys_bin=yosys_bin, timeout_s=timeout_s)
+    jobs = max(1, int(jobs))
     stats = DatapathIndexStats(failures_path=str(failures_path))
     graph_pairs: List[Tuple[RtlDocument, DatapathGraph]] = []
 
     with datapaths_path.open("w", encoding="utf-8") as datapaths_handle, failures_path.open("w", encoding="utf-8") as failures_handle:
-        for document in documents:
+        for result in _iter_datapath_extractions(documents, yosys_bin=yosys_bin, timeout_s=timeout_s, jobs=jobs):
+            document = result.document
             stats.source_documents += 1
-            try:
-                graphs = extractor.extract_document(document)
-            except Exception as exc:  # noqa: BLE001 - keep batch preprocessing resilient.
+            if result.error is not None:
                 stats.skipped += 1
                 failures_handle.write(
                     json.dumps(
                         {
                             "doc_id": document.doc_id,
-                            "error": str(exc),
+                            "error": result.error,
                             "metadata": document.metadata,
                         },
                         ensure_ascii=False,
@@ -273,13 +281,13 @@ def build_datapath_vector_db(
                     + "\n"
                 )
                 continue
-            if not graphs:
+            if not result.graphs:
                 stats.skipped += 1
                 failures_handle.write(
                     json.dumps({"doc_id": document.doc_id, "error": "no modules found"}, ensure_ascii=False) + "\n"
                 )
                 continue
-            for graph in graphs:
+            for graph in result.graphs:
                 stats.graphs += 1
                 graph_pairs.append((document, graph))
                 datapaths_handle.write(json.dumps(graph.to_dict(), ensure_ascii=False) + "\n")
@@ -292,6 +300,36 @@ def build_datapath_vector_db(
     store = build_vector_store(graph_documents, np.asarray(vectors, dtype=np.float32))
     store.save(output)
     return stats
+
+
+def _iter_datapath_extractions(
+    documents: Iterable[RtlDocument],
+    yosys_bin: str,
+    timeout_s: int,
+    jobs: int,
+) -> Iterable[_DatapathExtractionResult]:
+    if jobs <= 1:
+        extractor = YosysDatapathExtractor(yosys_bin=yosys_bin, timeout_s=timeout_s)
+        for document in documents:
+            yield _extract_datapath_document(document, extractor)
+        return
+
+    def run(document: RtlDocument) -> _DatapathExtractionResult:
+        extractor = YosysDatapathExtractor(yosys_bin=yosys_bin, timeout_s=timeout_s)
+        return _extract_datapath_document(document, extractor)
+
+    with ThreadPoolExecutor(max_workers=jobs) as executor:
+        yield from executor.map(run, documents)
+
+
+def _extract_datapath_document(
+    document: RtlDocument,
+    extractor: YosysDatapathExtractor,
+) -> _DatapathExtractionResult:
+    try:
+        return _DatapathExtractionResult(document=document, graphs=extractor.extract_document(document))
+    except Exception as exc:  # noqa: BLE001 - keep batch preprocessing resilient.
+        return _DatapathExtractionResult(document=document, error=str(exc))
 
 
 def _build_module_graph(

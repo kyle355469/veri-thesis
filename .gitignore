@@ -1,6 +1,7 @@
 merged.jsonl
 runs/*
 indexes/rtl_hash/
-indexes/rtl_datapath_hash/
+indexes/rtl_datapath_hash
 data/*
 __pycache__/
+vectors.npy

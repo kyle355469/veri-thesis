@@ -30,7 +30,7 @@ class SequencedLlm:
     def complete(self, prompt, temperature=0.1, max_tokens=2048):
         self.prompts.append(prompt)
         rtl = self.outputs.pop(0)
-        return f"<final_rtl>\n```verilog\n{rtl}\n```\n</final_rtl>"
+        return f"```verilog\n{rtl}\n```"
 
 
 class FakeDatapathExtractor:
@@ -105,9 +105,9 @@ class FixedPipeTests(unittest.TestCase):
         self.assertIn("graph-and", response.retrieved_doc_ids)
         self.assertEqual(response.metadata["first_edition_datapath"]["graph_count"], 1)
         self.assertEqual(response.metadata["second_edition"]["retrieved_doc_ids"], ["graph-and"])
-        self.assertIn("<first_edition_verified_rtl>", llm.prompts[1])
-        self.assertIn("<first_edition_datapath>", llm.prompts[1])
-        self.assertIn("<retrieved_code_structure_context>", llm.prompts[1])
+        self.assertIn("### First-Edition Verified RTL", llm.prompts[1])
+        self.assertIn("### First-Edition Datapath", llm.prompts[1])
+        self.assertIn("### Retrieved Code-Structure Context", llm.prompts[1])
         self.assertIn("a -> y via $and", llm.prompts[1])
 
 

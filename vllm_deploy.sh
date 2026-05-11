@@ -36,6 +36,6 @@ vllm serve "$MODEL" \
   --port "$PORT" \
   --dtype auto \
   --trust-remote-code \
-  --gpu-memory-utilization 0.90 \
-  --max-model-len 32768 \
+  --gpu-memory-utilization 0.93 \
+  --max-model-len 131072 \
   "${TOOL_ARGS[@]}"

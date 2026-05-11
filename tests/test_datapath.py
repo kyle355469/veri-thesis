@@ -112,6 +112,22 @@ class DatapathTests(unittest.TestCase):
             store = VectorStore.load(output)
             self.assertEqual(store.documents[0].doc_id, "doc-1:and2")
 
+    def test_build_datapath_vector_db_can_extract_in_parallel(self):
+        sources = [
+            RtlDocument("doc-1", "Design an and gate", "module and2; endmodule"),
+            RtlDocument("doc-2", "Design another and gate", "module and2; endmodule"),
+        ]
+        with tempfile.TemporaryDirectory() as tempdir:
+            output = Path(tempdir)
+            with patch("rag_rtl.datapath.YosysDatapathExtractor", FakeExtractor):
+                stats = build_datapath_vector_db(sources, HashingEmbedder(dim=64), output, jobs=2)
+
+            self.assertEqual(stats.source_documents, 2)
+            self.assertEqual(stats.graphs, 2)
+            self.assertEqual(stats.skipped, 0)
+            store = VectorStore.load(output)
+            self.assertEqual([document.doc_id for document in store.documents], ["doc-1:and2", "doc-2:and2"])
+
 
 if __name__ == "__main__":
     unittest.main()

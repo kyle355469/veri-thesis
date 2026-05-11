@@ -1,6 +1,9 @@
 numpy>=1.23
+pandas>=2.0
+pyarrow>=12.0
 pytest>=7.0
+sentence-transformers>=2.7
 
-# Optional but recommended for thesis-quality retrieval:
-# sentence-transformers>=2.7
+# Optional vLLM server/runtime support. The Python modules call an
+# OpenAI-compatible endpoint; vllm_deploy.sh invokes the vllm CLI directly.
 # vllm>=0.4

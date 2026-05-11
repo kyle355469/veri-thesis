@@ -9,4 +9,4 @@
 
 * TODO: a website to make the user prompt more visible, and make all tags become a selectable options, so that we can easily test different settings and see the results. Also the result must display on the website with what the model generate in each generation process 
 * TODO:now use all your budget to reconstruct the project to make the projhect more lightweight, more readable, and more flexiable to scale more module in the future.
-* TODO: vectorDB build become parallelizable, so that we can build the vectorDB faster
+* DONE: vectorDB build become parallelizable, so that we can build the vectorDB faster

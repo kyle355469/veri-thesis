@@ -12,6 +12,7 @@ from .evaluation import run_evaluation
 from .json_utils import json_default
 from .pipeline import FixedPipeRtlPipeline, RagRtlPipeline
 from .reporting import build_latest_report
+from .stg_eval import run_stg_dataset_evaluation
 from .types import RtlTask
 from .vector_store import VectorStore, build_vector_store
 from .verifier import RtlVerifier
@@ -36,6 +37,7 @@ def cmd_datapath_index(args: argparse.Namespace) -> None:
         output=args.output,
         yosys_bin=args.yosys_bin,
         timeout_s=args.timeout_s,
+        jobs=args.jobs,
     )
     print(
         "Built datapath graph VectorDB "
@@ -47,45 +49,11 @@ def cmd_datapath_index(args: argparse.Namespace) -> None:
 
 
 def cmd_generate(args: argparse.Namespace) -> None:
-    embedder = make_embedder(args.embedder)
-    store = VectorStore.load(args.index)
-    pipeline = RagRtlPipeline(
-        store=store,
-        embedder=embedder,
-        verifier=RtlVerifier(
-            testbench_path=args.testbench,
-            test_command=args.test_command,
-        ),
-        cache_config=CacheConfig(
-            path=args.cache,
-            mode=args.cache_mode,
-            reuse_threshold=args.cache_reuse_threshold,
-            evidence_threshold=args.cache_evidence_threshold,
-        ),
-        runtime_config=RuntimeConfig(
-            monitor_path=args.monitor,
-            failed_log_path=args.failed_log,
-            verbose_generation=args.verbose_generation,
-        ),
-        tool_config=ToolCallingConfig(
-            enabled=args.enable_tool_calling,
-            choice=args.tool_choice,
-            max_rounds=args.max_tool_rounds,
-        ),
-    )
-    task = RtlTask(
-        prompt=args.prompt or Path(args.prompt_file).read_text(encoding="utf-8"),
-        target_hdl=args.target_hdl,
-        module_signature=args.module_signature,
-        constraints=args.constraint,
-        max_repair_attempts=args.max_repair_attempts,
-        top_module=args.top_module,
-    )
+    pipeline = build_generate_pipeline(args)
+    task = build_task(args)
     response = pipeline.run(task, retrieve_k=args.retrieve_k, context_k=args.context_k)
     print(response.rtl)
-    if args.json_report:
-        report = build_latest_report(response)
-        Path(args.json_report).write_text(json.dumps(report, default=json_default, indent=2), encoding="utf-8")
+    write_report(response, args.json_report)
 
 
 def cmd_fixed_pipe(args: argparse.Namespace) -> None:
@@ -96,40 +64,13 @@ def cmd_fixed_pipe(args: argparse.Namespace) -> None:
         spec_store=spec_store,
         code_structure_store=code_structure_store,
         embedder=embedder,
-        verifier=RtlVerifier(
-            testbench_path=args.testbench,
-            test_command=args.test_command,
-        ),
-        cache_config=CacheConfig(
-            path=args.cache,
-            mode=args.cache_mode,
-            reuse_threshold=args.cache_reuse_threshold,
-            evidence_threshold=args.cache_evidence_threshold,
-        ),
-        runtime_config=RuntimeConfig(
-            monitor_path=args.monitor,
-            failed_log_path=args.failed_log,
-            verbose_generation=args.verbose_generation,
-        ),
-        tool_config=ToolCallingConfig(
-            enabled=args.enable_tool_calling,
-            choice=args.tool_choice,
-            max_rounds=args.max_tool_rounds,
-        ),
-        fixed_pipe_config=FixedPipeConfig(
-            yosys_bin=args.yosys_bin,
-            yosys_timeout_s=args.yosys_timeout_s,
-            second_edition_repair_attempts=args.second_edition_repair_attempts,
-        ),
+        verifier=build_verifier(args),
+        cache_config=build_cache_config(args),
+        runtime_config=build_runtime_config(args),
+        tool_config=build_tool_config(args),
+        fixed_pipe_config=build_fixed_pipe_config(args),
     )
-    task = RtlTask(
-        prompt=args.prompt or Path(args.prompt_file).read_text(encoding="utf-8"),
-        target_hdl=args.target_hdl,
-        module_signature=args.module_signature,
-        constraints=args.constraint,
-        max_repair_attempts=args.max_repair_attempts,
-        top_module=args.top_module,
-    )
+    task = build_task(args)
     response = pipeline.run(
         task,
         retrieve_k=args.retrieve_k,
@@ -138,9 +79,7 @@ def cmd_fixed_pipe(args: argparse.Namespace) -> None:
         structure_context_k=args.structure_context_k,
     )
     print(response.rtl)
-    if args.json_report:
-        report = build_latest_report(response)
-        Path(args.json_report).write_text(json.dumps(report, default=json_default, indent=2), encoding="utf-8")
+    write_report(response, args.json_report)
 
 
 def cmd_evaluate(args: argparse.Namespace) -> None:
@@ -157,6 +96,111 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
         cache_evidence_threshold=args.cache_evidence_threshold,
     )
     print(json.dumps({key: value for key, value in summary.items() if key != "records"}, indent=2))
+
+
+def cmd_stg_evaluate(args: argparse.Namespace) -> None:
+    pipeline = build_generate_pipeline(args)
+    extra_stg_args = args.stg_arg or []
+    summary = run_stg_dataset_evaluation(
+        dataset_path=args.dataset,
+        output_path=args.output,
+        pipeline=pipeline,
+        stg_bin=args.stg_bin,
+        target_hdl=args.target_hdl,
+        default_design_type=args.type,
+        limit=args.limit,
+        timeout_s=args.timeout_s,
+        spec_field=args.spec_field,
+        golden_field=args.golden_field,
+        save_passed_dir=args.save_passed_dir,
+        extra_stg_args=extra_stg_args,
+        retrieve_k=args.retrieve_k,
+        context_k=args.context_k,
+        max_repair_attempts=args.max_repair_attempts,
+        module_signature=args.module_signature,
+        constraints=args.constraint,
+        top_module=args.top_module,
+    )
+    print(json.dumps({key: value for key, value in summary.items() if key != "records"}, indent=2))
+
+
+def build_generate_pipeline(args: argparse.Namespace) -> RagRtlPipeline:
+    embedder = make_embedder(args.embedder)
+    store = VectorStore.load(args.index)
+    return RagRtlPipeline(
+        store=store,
+        embedder=embedder,
+        verifier=build_verifier(args),
+        cache_config=build_cache_config(args),
+        runtime_config=build_runtime_config(args),
+        tool_config=build_tool_config(args),
+    )
+
+
+def build_task(args: argparse.Namespace) -> RtlTask:
+    return RtlTask(
+        prompt=read_prompt(args),
+        target_hdl=args.target_hdl,
+        module_signature=args.module_signature,
+        constraints=args.constraint,
+        max_repair_attempts=args.max_repair_attempts,
+        top_module=args.top_module,
+    )
+
+
+def read_prompt(args: argparse.Namespace) -> str:
+    if args.prompt:
+        return args.prompt
+    if args.prompt_file:
+        return Path(args.prompt_file).read_text(encoding="utf-8")
+    raise ValueError("Provide --prompt or --prompt-file.")
+
+
+def build_verifier(args: argparse.Namespace) -> RtlVerifier:
+    return RtlVerifier(
+        testbench_path=args.testbench,
+        test_command=args.test_command,
+    )
+
+
+def build_cache_config(args: argparse.Namespace) -> CacheConfig:
+    return CacheConfig(
+        path=args.cache,
+        mode=args.cache_mode,
+        reuse_threshold=args.cache_reuse_threshold,
+        evidence_threshold=args.cache_evidence_threshold,
+    )
+
+
+def build_runtime_config(args: argparse.Namespace) -> RuntimeConfig:
+    return RuntimeConfig(
+        monitor_path=args.monitor,
+        failed_log_path=args.failed_log,
+        verbose_generation=args.verbose_generation,
+    )
+
+
+def build_tool_config(args: argparse.Namespace) -> ToolCallingConfig:
+    return ToolCallingConfig(
+        enabled=args.enable_tool_calling,
+        choice=args.tool_choice,
+        max_rounds=args.max_tool_rounds,
+    )
+
+
+def build_fixed_pipe_config(args: argparse.Namespace) -> FixedPipeConfig:
+    return FixedPipeConfig(
+        yosys_bin=args.yosys_bin,
+        yosys_timeout_s=args.yosys_timeout_s,
+        second_edition_repair_attempts=args.second_edition_repair_attempts,
+    )
+
+
+def write_report(response, output_path: str | None) -> None:
+    if not output_path:
+        return
+    report = build_latest_report(response)
+    Path(output_path).write_text(json.dumps(report, default=json_default, indent=2), encoding="utf-8")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -180,6 +224,7 @@ def build_parser() -> argparse.ArgumentParser:
     datapath_index.add_argument("--limit", type=int, default=None)
     datapath_index.add_argument("--yosys-bin", default="yosys")
     datapath_index.add_argument("--timeout-s", type=int, default=30)
+    datapath_index.add_argument("--jobs", type=int, default=1, help="Number of parallel Yosys workers")
     datapath_index.set_defaults(func=cmd_datapath_index)
 
     generate = subparsers.add_parser("generate", help="Generate RTL with retrieval and verification feedback")
@@ -255,6 +300,48 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--cache-reuse-threshold", type=float, default=0.95)
     evaluate.add_argument("--cache-evidence-threshold", type=float, default=0.88)
     evaluate.set_defaults(func=cmd_evaluate)
+
+    stg_evaluate = subparsers.add_parser(
+        "stg-evaluate",
+        help="Run the RAG generator on dataset specs, then check passing RTL against golden code with STG",
+    )
+    stg_evaluate.add_argument("--dataset", required=True, help="JSONL/JSON records with spec and golden code fields")
+    stg_evaluate.add_argument("--index", default="indexes/rtl_hash")
+    stg_evaluate.add_argument("--embedder", default="hash")
+    stg_evaluate.add_argument("--output", default="runs/stg_evaluation.json")
+    stg_evaluate.add_argument("--stg-bin", default="stg")
+    stg_evaluate.add_argument("--target-hdl", default="verilog")
+    stg_evaluate.add_argument("--module-signature")
+    stg_evaluate.add_argument("--constraint", action="append", default=[])
+    stg_evaluate.add_argument("--type", default="combinational", choices=["combinational", "seq_clocked", "seq_done"])
+    stg_evaluate.add_argument("--limit", type=int, default=None)
+    stg_evaluate.add_argument("--retrieve-k", type=int, default=8)
+    stg_evaluate.add_argument("--context-k", type=int, default=4)
+    stg_evaluate.add_argument("--max-repair-attempts", type=int, default=1)
+    stg_evaluate.add_argument("--timeout-s", type=int, default=120)
+    stg_evaluate.add_argument("--spec-field", help="Explicit dataset field containing the specification")
+    stg_evaluate.add_argument("--golden-field", help="Explicit dataset field containing the golden/reference code")
+    stg_evaluate.add_argument("--testbench")
+    stg_evaluate.add_argument("--top-module")
+    stg_evaluate.add_argument("--test-command")
+    stg_evaluate.add_argument("--cache", default="data/history_cache.json")
+    stg_evaluate.add_argument("--monitor", default="runs/stg_monitor.jsonl")
+    stg_evaluate.add_argument("--failed-log", default="runs/stg_failed_attempts.jsonl")
+    stg_evaluate.add_argument("--cache-mode", choices=["keywords", "direct"], default="keywords")
+    stg_evaluate.add_argument("--cache-reuse-threshold", type=float, default=0.95)
+    stg_evaluate.add_argument("--cache-evidence-threshold", type=float, default=0.88)
+    stg_evaluate.add_argument("--verbose-generation", action="store_true")
+    stg_evaluate.add_argument("--enable-tool-calling", action="store_true")
+    stg_evaluate.add_argument("--tool-choice", default="auto")
+    stg_evaluate.add_argument("--max-tool-rounds", type=int, default=4)
+    stg_evaluate.add_argument("--save-passed-dir", help="Directory where passing generated RTL files are written")
+    stg_evaluate.add_argument(
+        "--stg-arg",
+        action="append",
+        default=[],
+        help="Additional argument passed to `stg generate`; repeat for multiple tokens, e.g. --stg-arg=--verilator",
+    )
+    stg_evaluate.set_defaults(func=cmd_stg_evaluate)
 
     return parser
 

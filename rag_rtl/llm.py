@@ -9,9 +9,9 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from .json_utils import preview_text
+from .siliconmind_utils import parse_code as parse_siliconmind_code, wrap_code
 
-FINAL_RTL_RE = re.compile(r"<final_rtl>\s*(.*?)\s*</final_rtl>", re.IGNORECASE | re.DOTALL)
-CODE_RE = re.compile(r"```(?:verilog|systemverilog|sv)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
+HDL_SOURCE_RE = re.compile(r"(?m)^\s*(module|interface|package|primitive|program)\b", re.IGNORECASE)
 KEYWORD_PROMPT_MARKER = "You are a Verilog specification keyword extraction assistant."
 KEYWORD_TOKEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\d+")
 KEYWORD_STOPWORDS = {
@@ -39,14 +39,12 @@ KEYWORD_STOPWORDS = {
     "verilog",
     "with",
 }
-PLACEHOLDER_RTL = {"...", "...code...", "code...", "...rtl...", "...hdl..."}
-
 
 @dataclass
 class VllmClient:
     base_url: str = "http://localhost:8000/v1"
     model: str = "siliconmind-server"
-    timeout_s: int = 120
+    timeout_s: int = 300
     api_key: str = "EMPTY"
 
     @classmethod
@@ -60,8 +58,8 @@ class VllmClient:
     def chat(
         self,
         messages: Sequence[Dict[str, Any]],
-        temperature: float = 0.1,
-        max_tokens: int = 2048,
+        temperature: float = 0.4,
+        max_tokens: int = 65536,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[Any] = None,
         parallel_tool_calls: Optional[bool] = None,
@@ -81,7 +79,7 @@ class VllmClient:
         body = self._post_chat_completion(payload)
         return body["choices"][0]["message"]
 
-    def complete(self, prompt: str, temperature: float = 0.1, max_tokens: int = 2048) -> str:
+    def complete(self, prompt: str, temperature: float = 0.4, max_tokens: int = 2048) -> str:
         message = self.chat(
             [{"role": "user", "content": prompt}],
             temperature=temperature,
@@ -94,7 +92,7 @@ class VllmClient:
         prompt: str,
         tools: List[Dict[str, Any]],
         tool_executor: Callable[[str, Dict[str, Any]], str],
-        temperature: float = 0.1,
+        temperature: float = 0.4,
         max_tokens: int = 2048,
         tool_choice: Any = "auto",
         max_tool_rounds: int = 4,
@@ -232,7 +230,7 @@ class StubLlmClient:
                 }
             )
         self.prompts.append(prompt)
-        return f"<final_rtl>\n```verilog\n{self.rtl}\n```\n</final_rtl>"
+        return wrap_code(self.rtl)
 
     def complete_with_tools(
         self,
@@ -247,7 +245,7 @@ class StubLlmClient:
     ) -> str:
         self.tool_prompts.append(prompt)
         if action_recorder:
-            content = f"<final_rtl>\n```verilog\n{self.rtl}\n```\n</final_rtl>"
+            content = wrap_code(self.rtl)
             action_recorder(
                 {
                     "action": "llm_final_response",
@@ -261,30 +259,15 @@ class StubLlmClient:
 
 
 def extract_code(model_text: str) -> str:
-    final_matches = list(FINAL_RTL_RE.finditer(model_text))
-    source = _select_final_rtl_source(final_matches) or model_text
-    code_matches = list(CODE_RE.finditer(source))
-    if code_matches:
-        return code_matches[-1].group(1).strip()
-    return source.strip()
+    siliconmind_code = parse_siliconmind_code(model_text)
+    if siliconmind_code:
+        return siliconmind_code
+    source = model_text.strip()
+    return source if _looks_like_hdl_source(source) else ""
 
 
-def _select_final_rtl_source(final_matches: List[re.Match[str]]) -> Optional[str]:
-    for final_match in reversed(final_matches):
-        source = final_match.group(1).strip()
-        if not _looks_like_prompt_format_example(source):
-            return source
-    return None
-
-
-def _looks_like_prompt_format_example(source: str) -> bool:
-    lowered = source.lower()
-    if "<final_rtl" in lowered or "</final_rtl>" in lowered:
-        return True
-    code_matches = list(CODE_RE.finditer(source))
-    candidate = code_matches[-1].group(1) if code_matches else source
-    normalized = re.sub(r"\s+", "", candidate.lower())
-    return normalized in PLACEHOLDER_RTL
+def _looks_like_hdl_source(source: str) -> bool:
+    return bool(HDL_SOURCE_RE.search(source))
 
 
 def _parse_tool_arguments(arguments: Any) -> Dict[str, Any]:

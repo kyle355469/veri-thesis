@@ -9,10 +9,14 @@ This repository contains a thesis-oriented prototype for RAG-assisted RTL code g
 - `rag_rtl/vector_store.py`: stores embedded RTL documents as `vectors.npy` plus `documents.jsonl`.
 - `rag_rtl/datapath.py`: runs Yosys during preprocessing, converts RTL into module-level datapath graphs, and builds an extra graph-wise VectorDB.
 - `rag_rtl/retrieval.py`: vector retrieval plus a lexical RTL reranker.
+- `rag_rtl/retrieval_context.py`: reusable retrieve/rerank/summarize stack that any pipeline stage can share.
 - `rag_rtl/prompting.py`: builds answer-only RTL prompts with retrieved examples and verification diagnostics.
 - `rag_rtl/llm.py`: OpenAI-compatible vLLM client using `VLLM_BASE_URL`, `VLLM_MODEL`, and `VLLM_API_KEY`.
+- `rag_rtl/generation.py`: shared prompt, LLM, code extraction, verification, and repair loop for generation stages.
+- `rag_rtl/siliconmind_utils.py`: SiliconMind-V1-inspired prompt wrappers, fenced-code parsing, and self-check prompt helpers for Verilog generation/test/debug loops.
 - `rag_rtl/verifier.py`: runs `yosys` and `verilator --lint-only` when installed.
-- `rag_rtl/pipeline.py`: end-to-end keyword semantic cache, RAG, generation, verification, repair, failed-attempt logging, and monitoring flow.
+- `rag_rtl/pipelines/`: first-stage RAG and fixed-pipe orchestration built from small reusable stages.
+- `rag_rtl/pipeline.py`: backward-compatible imports for the public pipeline classes.
 - `rag_rtl/json_utils.py`: shared JSON serialization, JSONL append, and text-preview helpers used by reports, monitoring, tool calls, and scripts.
 
 The core pipelines still accept their original keyword arguments, but new modules should prefer `CacheConfig`, `RuntimeConfig`, `ToolCallingConfig`, and `FixedPipeConfig`. That keeps constructors stable as more retrieval, verification, or graph-processing stages are added.
@@ -46,7 +50,7 @@ export VLLM_API_KEY=EMPTY
 Then run the website from the repository root:
 
 ```bash
-python3 scripts/web_app.py --host 127.0.0.1 --port 8765
+python3 scripts/web_app.py --host 127.0.0.1 --port 8700
 ```
 
 Open:
@@ -118,6 +122,7 @@ Pre-serve graph retrievable data by synthesizing each Verilog solution through Y
 | `--limit LIMIT` | none | Process only the first `LIMIT` records. |
 | `--yosys-bin YOSYS_BIN` | `yosys` | Yosys executable name or path. |
 | `--timeout-s TIMEOUT_S` | `30` | Per-document Yosys timeout in seconds. |
+| `--jobs JOBS` | `1` | Number of parallel Yosys workers. |
 
 Example:
 
@@ -126,7 +131,8 @@ python3 -m rag_rtl.cli datapath-index \
   --corpus merged.jsonl \
   --output indexes/rtl_datapath_hash \
   --embedder hash \
-  --limit 1000
+  --limit 1000 \
+  --jobs 4
 ```
 
 ### `fixed-pipe`
@@ -324,7 +330,8 @@ python3 scripts/build_datapath_index.py \
   --corpus merged.jsonl \
   --output indexes/rtl_datapath_hash \
   --embedder hash \
-  --limit 1000
+  --limit 1000 \
+  --jobs 4
 ```
 
 ### `scripts/generate_rtl.py`
@@ -403,7 +410,8 @@ python3 -m rag_rtl.cli datapath-index \
   --corpus merged.jsonl \
   --output indexes/rtl_datapath_hash \
   --embedder hash \
-  --limit 1000
+  --limit 1000 \
+  --jobs 4
 
 bash vllm_deploy.sh
 ```

@@ -271,6 +271,7 @@ class LlmKeywordExtractor:
         keywords = self._parse_response(response)
         return keywords or self.fallback(text)
 
+    # extract JSON object or array from the response and parse keywords
     def _parse_response(self, response: str) -> List[str]:
         response = response.strip()
         payload: Any = None

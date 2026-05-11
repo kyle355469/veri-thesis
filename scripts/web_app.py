@@ -147,9 +147,16 @@ def _config_payload() -> Dict[str, Any]:
             "structure_context_k": 4,
             "max_repair_attempts": 1,
             "second_edition_repair_attempts": 1,
+            "generation_temperature": 0.4,
+            "max_tokens": 2048,
             "cache_mode": "keywords",
             "cache_reuse_threshold": 0.95,
             "cache_evidence_threshold": 0.88,
+            "cache": "data/history_cache.json",
+            "monitor": "runs/web_monitor.jsonl",
+            "failed_log": "runs/web_failed_attempts.jsonl",
+            "testbench": "",
+            "test_command": "",
         },
         "indexes": _discover_indexes(),
         "tags": _tag_options(primary),
@@ -189,6 +196,8 @@ def _run_generation(payload: Dict[str, Any]) -> Dict[str, Any]:
         monitor_path=_path_value(payload, "monitor", "runs/web_monitor.jsonl"),
         failed_log_path=_path_value(payload, "failed_log", "runs/web_failed_attempts.jsonl"),
         verbose_generation=True,
+        generation_temperature=_float_value(payload, "generation_temperature", 0.4),
+        max_tokens=_int_value(payload, "max_tokens", 2048),
     )
     tool_config = ToolCallingConfig(
         enabled=bool(payload.get("enable_tool_calling")),
@@ -274,6 +283,7 @@ def _generation_steps(response: PipelineResponse) -> List[Dict[str, Any]]:
                 "attempt": attempt,
                 "model_text": "",
                 "rtl": "",
+                "result_code": "",
                 "verification": None,
                 "actions": [],
             }
@@ -283,6 +293,7 @@ def _generation_steps(response: PipelineResponse) -> List[Dict[str, Any]]:
             steps[key]["model_text"] = action.get("content") or action.get("content_preview") or ""
         if name in {"rtl_extracted", "second_edition_rtl_extracted"}:
             steps[key]["rtl"] = action.get("rtl") or action.get("rtl_preview") or ""
+            steps[key]["result_code"] = steps[key]["rtl"]
         if name in {"verification_result", "second_edition_verification_result"}:
             steps[key]["verification"] = {
                 "passed": action.get("passed"),
@@ -297,10 +308,19 @@ def _generation_steps(response: PipelineResponse) -> List[Dict[str, Any]]:
                 "attempt": 0,
                 "model_text": "",
                 "rtl": response.rtl,
+                "result_code": response.rtl,
                 "verification": {"passed": response.verification.passed},
                 "actions": response.llm_actions,
             }
         ]
+    if response.cache_source == "history":
+        for step in steps.values():
+            if not step["result_code"]:
+                step["result_code"] = response.rtl
+            if not step["rtl"]:
+                step["rtl"] = response.rtl
+    elif order:
+        steps[order[-1]]["result_code"] = response.rtl
     return [steps[key] for key in order]
 
 
@@ -486,6 +506,8 @@ INDEX_HTML = """<!doctype html>
         <label>Structure retrieve K <input id="structureRetrieveK" type="number" min="1" value="8"></label>
         <label>Structure context K <input id="structureContextK" type="number" min="1" value="4"></label>
         <label>Second repairs <input id="secondEditionRepairAttempts" type="number" min="0" value="1"></label>
+        <label>Temperature <input id="generationTemperature" type="number" min="0" max="2" step="0.01" value="0.4"></label>
+        <label>Max tokens <input id="maxTokens" type="number" min="1" value="2048"></label>
         <label>Cache mode
           <select id="cacheMode">
             <option value="keywords">keywords</option>
@@ -498,6 +520,11 @@ INDEX_HTML = """<!doctype html>
         <label>Tool rounds <input id="maxToolRounds" type="number" min="1" value="4"></label>
         <label>Yosys bin <input id="yosysBin" type="text" value="yosys"></label>
         <label>Yosys timeout <input id="yosysTimeout" type="number" min="1" value="30"></label>
+        <label>Testbench <input id="testbench" type="text"></label>
+        <label>Test command <input id="testCommand" type="text"></label>
+        <label>Cache path <input id="cachePath" type="text" value="data/history_cache.json"></label>
+        <label>Monitor log <input id="monitorPath" type="text" value="runs/web_monitor.jsonl"></label>
+        <label>Failed log <input id="failedLogPath" type="text" value="runs/web_failed_attempts.jsonl"></label>
       </div>
 
       <div class="toggle-row">
@@ -718,7 +745,7 @@ label input, label select { margin-top: 5px; color: var(--ink); font-weight: 500
 .badge.fail { background: var(--danger); }
 .code-columns {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0;
 }
 .code-panel { min-width: 0; padding: 10px; }
@@ -789,9 +816,16 @@ function applyDefaults(defaults) {
   $('structureContextK').value = defaults.structure_context_k || 4;
   $('maxRepairAttempts').value = defaults.max_repair_attempts || 1;
   $('secondEditionRepairAttempts').value = defaults.second_edition_repair_attempts || 1;
+  $('generationTemperature').value = defaults.generation_temperature ?? 0.4;
+  $('maxTokens').value = defaults.max_tokens || 2048;
   $('cacheMode').value = defaults.cache_mode || 'keywords';
   $('cacheReuseThreshold').value = defaults.cache_reuse_threshold || 0.95;
   $('cacheEvidenceThreshold').value = defaults.cache_evidence_threshold || 0.88;
+  $('cachePath').value = defaults.cache || 'data/history_cache.json';
+  $('monitorPath').value = defaults.monitor || 'runs/web_monitor.jsonl';
+  $('failedLogPath').value = defaults.failed_log || 'runs/web_failed_attempts.jsonl';
+  $('testbench').value = defaults.testbench || '';
+  $('testCommand').value = defaults.test_command || '';
   updatePromptCount();
 }
 
@@ -874,9 +908,16 @@ function formPayload() {
     structure_context_k: Number($('structureContextK').value),
     max_repair_attempts: Number($('maxRepairAttempts').value),
     second_edition_repair_attempts: Number($('secondEditionRepairAttempts').value),
+    generation_temperature: Number($('generationTemperature').value),
+    max_tokens: Number($('maxTokens').value),
     cache_mode: $('cacheMode').value,
     cache_reuse_threshold: Number($('cacheReuseThreshold').value),
     cache_evidence_threshold: Number($('cacheEvidenceThreshold').value),
+    cache: $('cachePath').value,
+    monitor: $('monitorPath').value,
+    failed_log: $('failedLogPath').value,
+    testbench: $('testbench').value,
+    test_command: $('testCommand').value,
     enable_tool_calling: $('enableToolCalling').checked,
     tool_choice: $('toolChoice').value,
     max_tool_rounds: Number($('maxToolRounds').value),
@@ -923,6 +964,10 @@ function renderGeneration(step) {
         <div class="code-panel">
           <h2>Extracted RTL</h2>
           <pre>${escapeHtml(step.rtl || '')}</pre>
+        </div>
+        <div class="code-panel">
+          <h2>Result Code</h2>
+          <pre>${escapeHtml(step.result_code || step.rtl || '')}</pre>
         </div>
       </div>
     </article>

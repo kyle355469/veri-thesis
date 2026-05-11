@@ -1,5 +1,6 @@
 from __future__ import annotations
 
-from .pipelines import FixedPipeRtlPipeline, RagRtlPipeline
+from .rag import RagRtlPipeline
+from .fixed_pipe import FixedPipeRtlPipeline
 
 __all__ = ["FixedPipeRtlPipeline", "RagRtlPipeline"]
