@@ -22,6 +22,16 @@ class PassingVerifier:
         )
 
 
+class SequencedVerifier:
+    def __init__(self, reports):
+        self.reports = list(reports)
+        self.rtl_seen = []
+
+    def verify(self, rtl, top_module=None):
+        self.rtl_seen.append(rtl)
+        return self.reports.pop(0)
+
+
 class SequencedLlm:
     def __init__(self, outputs):
         self.outputs = list(outputs)
@@ -109,6 +119,82 @@ class FixedPipeTests(unittest.TestCase):
         self.assertIn("### First-Edition Datapath", llm.prompts[1])
         self.assertIn("### Retrieved Code-Structure Context", llm.prompts[1])
         self.assertIn("a -> y via $and", llm.prompts[1])
+
+    def test_fixed_pipe_second_edition_retry_uses_repair_prompt(self):
+        first_rtl = "module and2(input a, input b, output y); assign y = a & b; endmodule"
+        bad_second_rtl = "module and2(input a, input b, output y); assign y = a | b; endmodule"
+        fixed_second_rtl = "module and2(input a, input b, output y); assign y = a & b; endmodule"
+        spec_docs = [RtlDocument("spec-and", "Design a 2-input and gate", first_rtl)]
+        graph_docs = [
+            RtlDocument(
+                "graph-and",
+                "Design a 2-input and gate",
+                "datapath graph graph-and\nmodule and2\noperations $and:1\ndependencies\na -> y via $and\nb -> y via $and",
+                tags=["datapath", "$and"],
+            )
+        ]
+        embedder = HashingEmbedder(dim=128)
+        spec_store = build_vector_store(spec_docs, embedder.encode([doc.retrieval_text for doc in spec_docs]))
+        graph_store = build_vector_store(graph_docs, embedder.encode([doc.retrieval_text for doc in graph_docs]))
+        llm = SequencedLlm([first_rtl, bad_second_rtl, fixed_second_rtl])
+        verifier = SequencedVerifier(
+            [
+                VerificationReport(
+                    syntax_passed=True,
+                    lint_passed=True,
+                    diagnostics=[Diagnostic(tool="stub", passed=True)],
+                ),
+                VerificationReport(
+                    syntax_passed=False,
+                    lint_passed=False,
+                    diagnostics=[
+                        Diagnostic(
+                            tool="stub",
+                            passed=False,
+                            stdout="expected and gate",
+                            stderr="behavior mismatch",
+                            returncode=1,
+                        )
+                    ],
+                ),
+                VerificationReport(
+                    syntax_passed=True,
+                    lint_passed=True,
+                    diagnostics=[Diagnostic(tool="stub", passed=True)],
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            tmp_path = Path(tempdir)
+            pipeline = FixedPipeRtlPipeline(
+                spec_store=spec_store,
+                code_structure_store=graph_store,
+                embedder=embedder,
+                llm_client=llm,
+                verifier=verifier,
+                cache_path=tmp_path / "cache.json",
+                monitor_path=tmp_path / "monitor.jsonl",
+                cache_mode="direct",
+                second_edition_repair_attempts=1,
+            )
+            pipeline.datapath_extractor = FakeDatapathExtractor()
+
+            response = pipeline.run(RtlTask(prompt="Design a 2-input and gate named and2.", max_repair_attempts=0))
+
+        self.assertTrue(response.verification.passed)
+        self.assertEqual(response.rtl, fixed_second_rtl)
+        self.assertEqual(verifier.rtl_seen, [first_rtl, bad_second_rtl, fixed_second_rtl])
+        self.assertIn("### Previous Second-Edition RTL", llm.prompts[2])
+        self.assertIn(bad_second_rtl, llm.prompts[2])
+        self.assertIn("expected and gate", llm.prompts[2])
+        self.assertIn("behavior mismatch", llm.prompts[2])
+        self.assertIn("Repair the second-edition RTL using the diagnostics", llm.prompts[2])
+        retry_actions = [
+            item for item in response.llm_actions
+            if item["action"] == "second_edition_generation_attempt" and item["attempt"] == 1
+        ]
+        self.assertEqual(retry_actions[0]["retry_kind"], "verification")
 
 
 if __name__ == "__main__":

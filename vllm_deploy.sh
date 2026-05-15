@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -e
 
+# MODEL="Qwen/Qwen3-8B"
+# MODEL="Qwen/Qwen3-4B-Thinking-2507-FP8"
 MODEL="AS-SiliconMind/SiliconMind-V1-Qwen3-4B-T-2507"
 SERVED_NAME="siliconmind-server"
 PORT=8000

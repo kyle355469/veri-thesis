@@ -35,6 +35,33 @@ class FailingVerifier:
         )
 
 
+class FailingOnceVerifier:
+    def __init__(self):
+        self.calls = 0
+
+    def verify(self, rtl, top_module=None):
+        self.calls += 1
+        if self.calls == 1:
+            return VerificationReport(
+                syntax_passed=False,
+                lint_passed=False,
+                diagnostics=[
+                    Diagnostic(
+                        tool="stub",
+                        passed=False,
+                        stdout="lint stdout",
+                        stderr="syntax failed",
+                        returncode=1,
+                    )
+                ],
+            )
+        return VerificationReport(
+            syntax_passed=True,
+            lint_passed=True,
+            diagnostics=[Diagnostic(tool="stub", passed=True)],
+        )
+
+
 class CountingVerifier:
     def __init__(self):
         self.calls = 0
@@ -54,6 +81,16 @@ class RawTextLlm:
 
     def complete(self, prompt, temperature=0.1, max_tokens=2048):
         return self.text
+
+
+class SequencedRawLlm:
+    def __init__(self, outputs):
+        self.outputs = list(outputs)
+        self.prompts = []
+
+    def complete(self, prompt, temperature=0.1, max_tokens=2048):
+        self.prompts.append(prompt)
+        return self.outputs.pop(0)
 
 
 class DictEmbedder:
@@ -123,6 +160,31 @@ class PipelineTests(unittest.TestCase):
             self.assertTrue((tmp_path / "cache.json").exists())
             self.assertTrue((tmp_path / "monitor.jsonl").exists())
 
+    def test_pipeline_none_cache_mode_does_not_save_successful_rtl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            docs = [RtlDocument("invert-doc", "Design inverter", "module invert(input i, output o); assign o = ~i; endmodule")]
+            embedder = HashingEmbedder(dim=128)
+            store = build_vector_store(docs, embedder.encode([docs[0].retrieval_text]))
+            cache_path = tmp_path / "cache.json"
+            pipeline = RagRtlPipeline(
+                store=store,
+                embedder=embedder,
+                llm_client=StubLlmClient("module invert(input i, output o); assign o = ~i; endmodule"),
+                verifier=PassingVerifier(),
+                cache_config=CacheConfig(path=cache_path, mode="none"),
+                runtime_config=RuntimeConfig(
+                    monitor_path=tmp_path / "monitor.jsonl",
+                    failed_log_path=tmp_path / "failed.jsonl",
+                ),
+            )
+
+            response = pipeline.run(RtlTask(prompt="Build an inverter", max_repair_attempts=0))
+
+            self.assertTrue(response.verification.passed)
+            self.assertFalse(cache_path.exists())
+            self.assertEqual(response.metadata["cache_decision"]["decision"], "disabled")
+
     def test_pipeline_only_caches_verified_rtl_and_logs_failures(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -174,6 +236,108 @@ class PipelineTests(unittest.TestCase):
             self.assertFalse(response.verification.passed)
             self.assertEqual(response.verification.diagnostics[0].tool, "rtl_extraction")
             self.assertIn("No RTL code was extracted", response.verification.diagnostics[0].stderr)
+
+    def test_extraction_failure_uses_emergency_code_only_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            embedder = HashingEmbedder(dim=128)
+            llm = SequencedRawLlm(
+                [
+                    "I will reason about the module instead of returning code.",
+                    "```verilog\nmodule invert(input i, output o); assign o = ~i; endmodule\n```",
+                ]
+            )
+            verifier = CountingVerifier()
+            pipeline = RagRtlPipeline(
+                store=empty_store(),
+                embedder=embedder,
+                llm_client=llm,
+                verifier=verifier,
+                cache_path=tmp_path / "cache.json",
+                monitor_path=tmp_path / "monitor.jsonl",
+                failed_log_path=tmp_path / "failed.jsonl",
+                cache_mode="direct",
+            )
+
+            response = pipeline.run(RtlTask(prompt="Build an inverter", max_repair_attempts=0))
+
+            self.assertTrue(response.verification.passed)
+            self.assertEqual(verifier.calls, 1)
+            self.assertEqual(len(llm.prompts), 2)
+            self.assertIn("did not contain a parsable fenced HDL code block", llm.prompts[1])
+            self.assertIn("No reasoning. No explanation. No diagnostics.", llm.prompts[1])
+            self.assertNotIn("### Retrieved Context", llm.prompts[1])
+            self.assertNotIn("### Previous RTL", llm.prompts[1])
+            self.assertIn("emergency_extraction_retry", [item["action"] for item in response.llm_actions])
+
+    def test_extraction_retry_does_not_use_emergency_before_final_attempt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            embedder = HashingEmbedder(dim=128)
+            llm = SequencedRawLlm(
+                [
+                    "I will reason about the module instead of returning code.",
+                    "```verilog\nmodule invert(input i, output o); assign o = ~i; endmodule\n```",
+                ]
+            )
+            verifier = CountingVerifier()
+            pipeline = RagRtlPipeline(
+                store=empty_store(),
+                embedder=embedder,
+                llm_client=llm,
+                verifier=verifier,
+                cache_path=tmp_path / "cache.json",
+                monitor_path=tmp_path / "monitor.jsonl",
+                failed_log_path=tmp_path / "failed.jsonl",
+                cache_mode="direct",
+            )
+
+            response = pipeline.run(RtlTask(prompt="Build an inverter", max_repair_attempts=1))
+
+            self.assertTrue(response.verification.passed)
+            self.assertEqual(verifier.calls, 1)
+            self.assertEqual(len(llm.prompts), 2)
+            self.assertIn("did not contain a parsable fenced HDL code block", llm.prompts[1])
+            self.assertIn("### Retrieved Context", llm.prompts[1])
+            self.assertNotIn("emergency_extraction_retry", [item["action"] for item in response.llm_actions])
+
+    def test_verification_retry_uses_previous_rtl_and_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            embedder = HashingEmbedder(dim=128)
+            bad_rtl = "module invert(input i, output o); assign o = i; endmodule"
+            fixed_rtl = "module invert(input i, output o); assign o = ~i; endmodule"
+            llm = SequencedRawLlm(
+                [
+                    f"```verilog\n{bad_rtl}\n```",
+                    f"```verilog\n{fixed_rtl}\n```",
+                ]
+            )
+            pipeline = RagRtlPipeline(
+                store=empty_store(),
+                embedder=embedder,
+                llm_client=llm,
+                verifier=FailingOnceVerifier(),
+                cache_path=tmp_path / "cache.json",
+                monitor_path=tmp_path / "monitor.jsonl",
+                failed_log_path=tmp_path / "failed.jsonl",
+                cache_mode="direct",
+            )
+
+            response = pipeline.run(RtlTask(prompt="Build an inverter", max_repair_attempts=1))
+
+            self.assertTrue(response.verification.passed)
+            self.assertEqual(len(llm.prompts), 2)
+            self.assertIn("### Previous RTL", llm.prompts[1])
+            self.assertIn(bad_rtl, llm.prompts[1])
+            self.assertIn("lint stdout", llm.prompts[1])
+            self.assertIn("syntax failed", llm.prompts[1])
+            self.assertIn("Repair the previous RTL using the diagnostics", llm.prompts[1])
+            retry_actions = [
+                item for item in response.llm_actions
+                if item["action"] == "llm_generation_attempt" and item["attempt"] == 1
+            ]
+            self.assertEqual(retry_actions[0]["retry_kind"], "verification")
 
     def test_evidence_range_cache_match_is_prompt_evidence_not_reuse(self):
         with tempfile.TemporaryDirectory() as tmp:

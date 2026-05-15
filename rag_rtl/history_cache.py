@@ -352,8 +352,8 @@ class HistorySemanticCache:
         mode: str = "keywords",
         keyword_extractor: Optional[Callable[[str], List[str]]] = None,
     ):
-        if mode not in {"keywords", "direct"}:
-            raise ValueError("cache mode must be 'keywords' or 'direct'")
+        if mode not in {"keywords", "direct", "none"}:
+            raise ValueError("cache mode must be 'keywords', 'direct', or 'none'")
         self.embedder = embedder
         self.path = Path(path)
         self.reuse_threshold = reuse_threshold if threshold is None else threshold
@@ -364,13 +364,21 @@ class HistorySemanticCache:
         self.keyword_extractor = keyword_extractor or extract_keywords
         self.entries: List[CacheEntry] = []
         self._lock = threading.RLock()
-        if self.path.exists():
+        if self.mode != "none" and self.path.exists():
             self.load()
 
     def get(self, query: str) -> Optional[CacheEntry]:
         return self.lookup(query).reusable_entry
 
     def lookup(self, query: str) -> CacheLookup:
+        if self.mode == "none":
+            return CacheLookup(
+                query=query,
+                mode=self.mode,
+                reuse_threshold=self.reuse_threshold,
+                evidence_threshold=self.evidence_threshold,
+                decision="disabled",
+            )
         query_keywords = self.keyword_extractor(query) if self.mode == "keywords" else extract_keywords(query)
         with self._lock:
             if not self.entries:
@@ -421,6 +429,8 @@ class HistorySemanticCache:
             return lookup
 
     def put(self, query: str, result: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        if self.mode == "none":
+            return
         embedding = self._normalize(self.embedder.encode([query])[0]).astype(float).tolist()
         entry_metadata = dict(metadata or {})
         if self.mode == "keywords":

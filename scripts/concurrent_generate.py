@@ -50,12 +50,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cache", default="data/history_cache.json")
     parser.add_argument("--monitor", default="runs/monitor.jsonl")
     parser.add_argument("--failed-log", default="runs/failed_attempts.jsonl")
-    parser.add_argument("--cache-mode", choices=["keywords", "direct"], default="keywords")
+    parser.add_argument("--cache-mode", choices=["keywords", "direct", "none"], default="keywords")
     parser.add_argument("--cache-reuse-threshold", type=float, default=0.95)
     parser.add_argument("--cache-evidence-threshold", type=float, default=0.88)
     parser.add_argument("--retrieve-k", type=int, default=8)
     parser.add_argument("--context-k", type=int, default=4)
     parser.add_argument("--verbose-generation", action="store_true")
+    parser.add_argument("--generation-temperature", type=float, default=0.4)
+    parser.add_argument("--max-tokens", type=int, default=2048)
     parser.add_argument("--enable-tool-calling", action="store_true")
     parser.add_argument("--tool-choice", default="auto")
     parser.add_argument("--max-tool-rounds", type=int, default=4)
@@ -88,6 +90,8 @@ def main() -> None:
             monitor_path=args.monitor,
             failed_log_path=args.failed_log,
             verbose_generation=args.verbose_generation,
+            generation_temperature=args.generation_temperature,
+            max_tokens=args.max_tokens,
         ),
         tool_config=ToolCallingConfig(
             enabled=args.enable_tool_calling,

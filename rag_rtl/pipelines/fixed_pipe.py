@@ -11,7 +11,7 @@ from ..generation import SECOND_STAGE_ACTIONS, RtlGenerationStage
 from ..json_utils import dumps_json
 from ..llm import VllmClient
 from ..monitor import Monitor
-from ..prompting import build_second_edition_prompt
+from ..prompting import build_emergency_second_edition_prompt, build_second_edition_prompt
 from ..retrieval_context import RetrievalContext
 from ..types import PipelineResponse, RetrievalHit, RtlDocument, RtlTask
 from ..vector_store import VectorStore
@@ -195,12 +195,17 @@ class FixedPipeRtlPipeline:
         stage_result = self._second_edition_stage().run(
             task=task,
             max_attempts=self.second_edition_repair_attempts,
-            build_prompt=lambda diagnostics, _attempt: build_second_edition_prompt(
+            build_prompt=lambda feedback, _attempt: build_second_edition_prompt(
                 task=task,
                 first_edition_rtl=first_response.rtl,
                 first_edition_datapath=graph_text,
                 structure_hits=structure_hits,
-                diagnostics=diagnostics,
+                feedback=feedback,
+            ),
+            build_emergency_prompt=lambda model_text, _attempt, _feedback: build_emergency_second_edition_prompt(
+                task,
+                first_response.rtl,
+                model_text,
             ),
             llm_actions=llm_actions,
             timings=timings,

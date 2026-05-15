@@ -86,6 +86,7 @@ def run_stg_equivalence(
         golden_path.write_text(golden_code, encoding="utf-8")
 
         command = [
+            # "CCACHE_DISABLE=1",
             stg_command,
             "generate",
             "--verilog",
@@ -99,6 +100,7 @@ def run_stg_equivalence(
             "--out-exe",
             str(exe_path),
             "--emplace-module",
+            "--verilator",
             *extra_stg_args,
         ]
         if dut_module:
@@ -127,6 +129,8 @@ def run_stg_equivalence(
             )
 
         if generated.returncode != 0:
+            print(generated)
+            print(f"STG generation failed with return code {generated.returncode}")
             return StgRunResult(
                 passed=False,
                 generate_returncode=generated.returncode,
@@ -148,6 +152,7 @@ def run_stg_equivalence(
                 cwd=tempdir,
             )
         except subprocess.TimeoutExpired as exc:
+            print(f"STG execution timed out after {timeout_s} seconds")
             return StgRunResult(
                 passed=False,
                 generate_returncode=generated.returncode,
@@ -181,6 +186,7 @@ def run_stg_dataset_evaluation(
     timeout_s: int = 120,
     spec_field: Optional[str] = None,
     golden_field: Optional[str] = None,
+    save_result_code_dir: Optional[str | Path] = None,
     save_passed_dir: Optional[str | Path] = None,
     extra_stg_args: Sequence[str] = (),
     retrieve_k: int = 8,
@@ -192,6 +198,9 @@ def run_stg_dataset_evaluation(
 ) -> Dict[str, Any]:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    result_code_dir = Path(save_result_code_dir) if save_result_code_dir else None
+    if result_code_dir:
+        result_code_dir.mkdir(parents=True, exist_ok=True)
     passed_dir = Path(save_passed_dir) if save_passed_dir else None
     if passed_dir:
         passed_dir.mkdir(parents=True, exist_ok=True)
@@ -250,6 +259,11 @@ def run_stg_dataset_evaluation(
             result.update({"passed": False, "error": "RAG pipeline did not return HDL code"})
             records.append(result)
             continue
+        result["generated"] = True
+        if result_code_dir:
+            code_path = result_code_dir / _result_code_filename(index, record, target_hdl)
+            code_path.write_text(candidate_code, encoding="utf-8")
+            result["generated_code_path"] = str(code_path)
         if not response.verification.passed:
             result.update(
                 {
@@ -301,12 +315,19 @@ def run_stg_dataset_evaluation(
         records.append(result)
 
     count = max(len(records), 1)
+    passed_count = sum(1 for item in records if item.get("passed"))
     summary = {
         "dataset": str(dataset_path),
         "num_records": len(records),
-        "passed": sum(1 for item in records if item.get("passed")),
-        "pass_rate": sum(1 for item in records if item.get("passed")) / count,
+        "generated": sum(1 for item in records if item.get("generated")),
+        "rag_generation_passed": sum(1 for item in records if item.get("rag_generation_passed")),
+        "syntax_passed": sum(1 for item in records if item.get("syntax_passed")),
+        "lint_passed": sum(1 for item in records if item.get("lint_passed")),
+        "stg_checked": sum(1 for item in records if "generate_returncode" in item),
+        "passed": passed_count,
+        "pass_rate": passed_count / count,
         "total_s": time.perf_counter() - start,
+        "result_code_dir": str(result_code_dir) if result_code_dir else None,
         "records": records,
     }
     output_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -316,6 +337,25 @@ def run_stg_dataset_evaluation(
 def infer_first_module_name(code: str) -> Optional[str]:
     match = MODULE_RE.search(code)
     return match.group(1) if match else None
+
+
+def _result_code_filename(index: int, record: Dict[str, Any], target_hdl: str) -> str:
+    raw_id = record.get("id") or record.get("task_id") or record.get("problem_id")
+    stem = f"result_{index:05d}"
+    if raw_id is not None:
+        safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(raw_id)).strip("._")
+        if safe_id:
+            stem = f"{stem}_{safe_id[:80]}"
+    return f"{stem}{_hdl_extension(target_hdl)}"
+
+
+def _hdl_extension(target_hdl: str) -> str:
+    normalized = target_hdl.lower()
+    if normalized in {"systemverilog", "sv"}:
+        return ".sv"
+    if normalized in {"vhdl", "vhd"}:
+        return ".vhd"
+    return ".v"
 
 
 def _pick_text(record: Dict[str, Any], fields: Sequence[Optional[str]]) -> str:

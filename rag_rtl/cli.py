@@ -7,7 +7,7 @@ from pathlib import Path
 from .config import CacheConfig, FixedPipeConfig, RuntimeConfig, ToolCallingConfig
 from .dataset import iter_jsonl_documents
 from .datapath import build_datapath_vector_db
-from .embeddings import make_embedder
+from .embeddings import encode_texts, make_embedder
 from .evaluation import run_evaluation
 from .json_utils import json_default
 from .pipeline import FixedPipeRtlPipeline, RagRtlPipeline
@@ -22,7 +22,7 @@ def cmd_index(args: argparse.Namespace) -> None:
     embedder = make_embedder(args.embedder)
     documents = list(iter_jsonl_documents(args.corpus, limit=args.limit))
     texts = [document.retrieval_text for document in documents]
-    vectors = embedder.encode(texts)
+    vectors = encode_texts(embedder, texts, jobs=args.jobs)
     store = build_vector_store(documents, vectors)
     store.save(args.output)
     print(f"Indexed {len(documents)} documents into {args.output}")
@@ -101,6 +101,7 @@ def cmd_evaluate(args: argparse.Namespace) -> None:
 def cmd_stg_evaluate(args: argparse.Namespace) -> None:
     pipeline = build_generate_pipeline(args)
     extra_stg_args = args.stg_arg or []
+    result_code_dir = args.save_result_code_dir or f"{Path(args.output).with_suffix('')}_codes"
     summary = run_stg_dataset_evaluation(
         dataset_path=args.dataset,
         output_path=args.output,
@@ -112,6 +113,7 @@ def cmd_stg_evaluate(args: argparse.Namespace) -> None:
         timeout_s=args.timeout_s,
         spec_field=args.spec_field,
         golden_field=args.golden_field,
+        save_result_code_dir=result_code_dir,
         save_passed_dir=args.save_passed_dir,
         extra_stg_args=extra_stg_args,
         retrieve_k=args.retrieve_k,
@@ -177,6 +179,8 @@ def build_runtime_config(args: argparse.Namespace) -> RuntimeConfig:
         monitor_path=args.monitor,
         failed_log_path=args.failed_log,
         verbose_generation=args.verbose_generation,
+        generation_temperature=getattr(args, "generation_temperature", 0.4),
+        max_tokens=getattr(args, "max_tokens", 2048),
     )
 
 
@@ -212,6 +216,7 @@ def build_parser() -> argparse.ArgumentParser:
     index.add_argument("--output", default="indexes/rtl_hash")
     index.add_argument("--embedder", default="hash")
     index.add_argument("--limit", type=int, default=None)
+    index.add_argument("--jobs", type=int, default=1, help="Number of parallel embedding workers")
     index.set_defaults(func=cmd_index)
 
     datapath_index = subparsers.add_parser(
@@ -237,14 +242,16 @@ def build_parser() -> argparse.ArgumentParser:
     generate.add_argument("--constraint", action="append", default=[])
     generate.add_argument("--retrieve-k", type=int, default=8)
     generate.add_argument("--context-k", type=int, default=4)
-    generate.add_argument("--max-repair-attempts", type=int, default=1)
+    generate.add_argument("--max-repair-attempts", type=int, default=2)
     generate.add_argument("--cache", default="data/history_cache.json")
     generate.add_argument("--monitor", default="runs/monitor.jsonl")
-    generate.add_argument("--cache-mode", choices=["keywords", "direct"], default="keywords")
+    generate.add_argument("--cache-mode", choices=["keywords", "direct", "none"], default="keywords")
     generate.add_argument("--cache-reuse-threshold", type=float, default=0.95)
     generate.add_argument("--cache-evidence-threshold", type=float, default=0.88)
     generate.add_argument("--failed-log", default="runs/failed_attempts.jsonl")
     generate.add_argument("--verbose-generation", action="store_true")
+    generate.add_argument("--generation-temperature", type=float, default=0.2)
+    generate.add_argument("--max-tokens", type=int, default=32768)
     generate.add_argument("--enable-tool-calling", action="store_true")
     generate.add_argument("--tool-choice", default="auto", help="vLLM tool_choice value, for example auto or required.")
     generate.add_argument("--max-tool-rounds", type=int, default=4)
@@ -270,15 +277,17 @@ def build_parser() -> argparse.ArgumentParser:
     fixed_pipe.add_argument("--context-k", type=int, default=2)
     fixed_pipe.add_argument("--structure-retrieve-k", type=int, default=4)
     fixed_pipe.add_argument("--structure-context-k", type=int, default=2)
-    fixed_pipe.add_argument("--max-repair-attempts", type=int, default=1)
-    fixed_pipe.add_argument("--second-edition-repair-attempts", type=int, default=1)
+    fixed_pipe.add_argument("--max-repair-attempts", type=int, default=2)
+    fixed_pipe.add_argument("--second-edition-repair-attempts", type=int, default=2)
     fixed_pipe.add_argument("--cache", default="data/history_cache.json")
     fixed_pipe.add_argument("--monitor", default="runs/monitor.jsonl")
-    fixed_pipe.add_argument("--cache-mode", choices=["keywords", "direct"], default="keywords")
+    fixed_pipe.add_argument("--cache-mode", choices=["keywords", "direct", "none"], default="keywords")
     fixed_pipe.add_argument("--cache-reuse-threshold", type=float, default=0.95)
     fixed_pipe.add_argument("--cache-evidence-threshold", type=float, default=0.88)
     fixed_pipe.add_argument("--failed-log", default="runs/failed_attempts.jsonl")
     fixed_pipe.add_argument("--verbose-generation", action="store_true")
+    fixed_pipe.add_argument("--generation-temperature", type=float, default=0.2)
+    fixed_pipe.add_argument("--max-tokens", type=int, default=32768)
     fixed_pipe.add_argument("--enable-tool-calling", action="store_true")
     fixed_pipe.add_argument("--tool-choice", default="auto", help="vLLM tool_choice value, for example auto or required.")
     fixed_pipe.add_argument("--max-tool-rounds", type=int, default=4)
@@ -290,13 +299,13 @@ def build_parser() -> argparse.ArgumentParser:
     fixed_pipe.add_argument("--json-report")
     fixed_pipe.set_defaults(func=cmd_fixed_pipe)
 
-    evaluate = subparsers.add_parser("evaluate", help="Run thesis baseline evaluation on a JSONL prompt set")
-    evaluate.add_argument("--tasks", required=True, help="JSONL with at least a 'prompt' field per row")
+    evaluate = subparsers.add_parser("evaluate", help="Run thesis baseline evaluation on a JSON/JSONL prompt set")
+    evaluate.add_argument("--tasks", required=True, help="JSON/JSONL records with a prompt/spec field")
     evaluate.add_argument("--index", default="indexes/rtl_hash")
     evaluate.add_argument("--embedder", default="hash")
     evaluate.add_argument("--mode", choices=["llm_only", "rag", "rag_cache_verify"], default="rag_cache_verify")
     evaluate.add_argument("--output", default="runs/evaluation.json")
-    evaluate.add_argument("--cache-mode", choices=["keywords", "direct"], default="keywords")
+    evaluate.add_argument("--cache-mode", choices=["keywords", "direct", "none"], default="keywords")
     evaluate.add_argument("--cache-reuse-threshold", type=float, default=0.95)
     evaluate.add_argument("--cache-evidence-threshold", type=float, default=0.88)
     evaluate.set_defaults(func=cmd_evaluate)
@@ -317,7 +326,7 @@ def build_parser() -> argparse.ArgumentParser:
     stg_evaluate.add_argument("--limit", type=int, default=None)
     stg_evaluate.add_argument("--retrieve-k", type=int, default=8)
     stg_evaluate.add_argument("--context-k", type=int, default=4)
-    stg_evaluate.add_argument("--max-repair-attempts", type=int, default=1)
+    stg_evaluate.add_argument("--max-repair-attempts", type=int, default=2)
     stg_evaluate.add_argument("--timeout-s", type=int, default=120)
     stg_evaluate.add_argument("--spec-field", help="Explicit dataset field containing the specification")
     stg_evaluate.add_argument("--golden-field", help="Explicit dataset field containing the golden/reference code")
@@ -327,13 +336,21 @@ def build_parser() -> argparse.ArgumentParser:
     stg_evaluate.add_argument("--cache", default="data/history_cache.json")
     stg_evaluate.add_argument("--monitor", default="runs/stg_monitor.jsonl")
     stg_evaluate.add_argument("--failed-log", default="runs/stg_failed_attempts.jsonl")
-    stg_evaluate.add_argument("--cache-mode", choices=["keywords", "direct"], default="keywords")
+    stg_evaluate.add_argument("--cache-mode", choices=["keywords", "direct", "none"], default="keywords")
     stg_evaluate.add_argument("--cache-reuse-threshold", type=float, default=0.95)
     stg_evaluate.add_argument("--cache-evidence-threshold", type=float, default=0.88)
     stg_evaluate.add_argument("--verbose-generation", action="store_true")
+    stg_evaluate.add_argument("--generation-temperature", type=float, default=0.4)
+    stg_evaluate.add_argument("--max-tokens", type=int, default=2048)
     stg_evaluate.add_argument("--enable-tool-calling", action="store_true")
     stg_evaluate.add_argument("--tool-choice", default="auto")
     stg_evaluate.add_argument("--max-tool-rounds", type=int, default=4)
+    stg_evaluate.add_argument(
+        "--save-result-code-dir",
+        "--save-code-dir",
+        dest="save_result_code_dir",
+        help="Directory where every generated RTL result is written; defaults to OUTPUT stem plus _codes",
+    )
     stg_evaluate.add_argument("--save-passed-dir", help="Directory where passing generated RTL files are written")
     stg_evaluate.add_argument(
         "--stg-arg",

@@ -82,3 +82,64 @@ def test_stg_dataset_uses_rag_pipeline_before_stg(tmp_path):
     assert pipeline.calls[0][1:] == (3, 2)
     assert summary["records"][0]["rag_generation_passed"] is True
     assert summary["records"][0]["stderr_tail"] == "stg binary not found: definitely-missing-stg"
+
+
+def test_stg_dataset_saves_all_generated_result_code(tmp_path):
+    class FakePipeline:
+        def __init__(self):
+            self.responses = [
+                PipelineResponse(
+                    rtl="module ok(input a, output y); assign y = a; endmodule",
+                    verification=VerificationReport(True, True, []),
+                    retrieved_doc_ids=[],
+                    cache_source="miss",
+                    repair_attempts=0,
+                ),
+                PipelineResponse(
+                    rtl="this is not valid verilog",
+                    verification=VerificationReport(False, False, []),
+                    retrieved_doc_ids=[],
+                    cache_source="miss",
+                    repair_attempts=1,
+                ),
+            ]
+
+        def run(self, *args, **kwargs):
+            return self.responses.pop(0)
+
+    dataset = tmp_path / "dataset.json"
+    output = tmp_path / "out.json"
+    code_dir = tmp_path / "codes"
+    dataset.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "good-case",
+                    "spec": "make a buffer",
+                    "golden_code": "module ok(input a, output y); assign y = a; endmodule",
+                },
+                {
+                    "id": "bad case",
+                    "spec": "make broken code",
+                    "golden_code": "module bad; endmodule",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    summary = run_stg_dataset_evaluation(
+        dataset,
+        output,
+        pipeline=FakePipeline(),
+        stg_bin="definitely-missing-stg",
+        save_result_code_dir=code_dir,
+    )
+
+    assert summary["generated"] == 2
+    assert summary["result_code_dir"] == str(code_dir)
+    assert (code_dir / "result_00000_good-case.v").read_text(encoding="utf-8").startswith("module ok")
+    assert (code_dir / "result_00001_bad_case.v").read_text(encoding="utf-8") == "this is not valid verilog"
+    assert summary["records"][0]["generated_code_path"] == str(code_dir / "result_00000_good-case.v")
+    assert summary["records"][1]["generated_code_path"] == str(code_dir / "result_00001_bad_case.v")
+    assert json.loads(output.read_text(encoding="utf-8"))["result_code_dir"] == str(code_dir)

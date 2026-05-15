@@ -512,6 +512,7 @@ INDEX_HTML = """<!doctype html>
           <select id="cacheMode">
             <option value="keywords">keywords</option>
             <option value="direct">direct</option>
+            <option value="none">none</option>
           </select>
         </label>
         <label>Reuse threshold <input id="cacheReuseThreshold" type="number" step="0.01" value="0.95"></label>

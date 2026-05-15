@@ -44,7 +44,7 @@ KEYWORD_STOPWORDS = {
 class VllmClient:
     base_url: str = "http://localhost:8000/v1"
     model: str = "siliconmind-server"
-    timeout_s: int = 300
+    timeout_s: int = 1200
     api_key: str = "EMPTY"
 
     @classmethod

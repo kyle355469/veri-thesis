@@ -4,7 +4,7 @@ import json
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Sequence
 
 from .config import CacheConfig, RuntimeConfig
 from .embeddings import Embedder
@@ -13,20 +13,114 @@ from .pipeline import RagRtlPipeline
 from .types import RtlTask
 from .vector_store import VectorStore
 
+TASK_PROMPT_FIELDS = ("prompt", "spec", "problem", "instruction", "description")
+
 
 def iter_tasks(path: str | Path) -> Iterable[RtlTask]:
-    with Path(path).open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            payload = json.loads(line)
-            yield RtlTask(
-                prompt=payload["prompt"],
-                target_hdl=payload.get("target_hdl", "verilog"),
-                module_signature=payload.get("module_signature"),
-                constraints=payload.get("constraints", []),
-                max_repair_attempts=int(payload.get("max_repair_attempts", 1)),
+    path = Path(path)
+    text = path.read_text(encoding="utf-8")
+    stripped = text.lstrip()
+
+    if stripped.startswith("["):
+        payload = json.loads(text)
+        for index, record in enumerate(_records_from_json_payload(payload, path)):
+            yield _task_from_record(record, path, index)
+        return
+
+    if stripped.startswith("{"):
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        else:
+            for index, record in enumerate(_records_from_json_payload(payload, path)):
+                yield _task_from_record(record, path, index)
+            return
+
+    for index, record in enumerate(_records_from_jsonl(text, path)):
+        yield _task_from_record(record, path, index)
+
+
+def _records_from_json_payload(payload: Any, path: Path) -> Iterable[Dict[str, Any]]:
+    if isinstance(payload, list):
+        records = payload
+    elif isinstance(payload, dict):
+        if _pick_text(payload, TASK_PROMPT_FIELDS):
+            records = [payload]
+        elif isinstance(payload.get("tasks"), list):
+            records = payload["tasks"]
+        elif isinstance(payload.get("records"), list):
+            records = payload["records"]
+        else:
+            raise ValueError(
+                f"{path}: JSON object must be a task with one of {TASK_PROMPT_FIELDS} "
+                "or contain a 'tasks'/'records' list"
             )
+    else:
+        raise ValueError(f"{path}: expected a JSON array, JSON object, or JSONL task records")
+
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            raise ValueError(f"{path}: task record {index} must be a JSON object")
+        yield record
+
+
+def _records_from_jsonl(text: str, path: Path) -> Iterable[Dict[str, Any]]:
+    for line_number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path}:{line_number}: expected one JSON task object per line") from exc
+        if not isinstance(payload, dict):
+            raise ValueError(f"{path}:{line_number}: task record must be a JSON object")
+        yield payload
+
+
+def _task_from_record(payload: Dict[str, Any], path: Path, index: int) -> RtlTask:
+    prompt = _pick_text(payload, TASK_PROMPT_FIELDS)
+    if not prompt:
+        raise ValueError(f"{path}: task record {index} is missing one of {TASK_PROMPT_FIELDS}")
+
+    constraints = payload.get("constraints", [])
+    if isinstance(constraints, str):
+        constraints = [constraints]
+    elif not isinstance(constraints, list):
+        constraints = []
+
+    return RtlTask(
+        prompt=prompt,
+        target_hdl=str(payload.get("target_hdl", "verilog")),
+        module_signature=_stringify_field(payload.get("module_signature")) or None,
+        constraints=[item for item in constraints if isinstance(item, str)],
+        max_repair_attempts=int(payload.get("max_repair_attempts", 1)),
+        top_module=_stringify_field(payload.get("top_module")) or None,
+    )
+
+
+def _pick_text(record: Dict[str, Any], fields: Sequence[str]) -> str:
+    for field in fields:
+        text = _stringify_field(record.get(field))
+        if text:
+            return text
+    return ""
+
+
+def _stringify_field(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        parts: List[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                content = item.get("content", "")
+                if isinstance(content, str):
+                    parts.append(content)
+            elif isinstance(item, str):
+                parts.append(item)
+        return "\n".join(parts).strip()
+    return ""
 
 
 def run_evaluation(

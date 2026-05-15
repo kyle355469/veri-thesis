@@ -18,6 +18,13 @@ class DictEmbedder:
         return np.asarray([self.vectors[text] for text in texts], dtype=np.float32)
 
 
+class ExplodingEmbedder:
+    dim = 2
+
+    def encode(self, texts):
+        raise AssertionError("cache mode none must not compute embeddings")
+
+
 class KeywordLlm:
     def __init__(self, response):
         self.response = response
@@ -170,6 +177,30 @@ class HistoryCacheTests(unittest.TestCase):
             self.assertEqual(lookup.decision, "miss")
             self.assertEqual(lookup.candidate_count, 0)
             self.assertIsNone(lookup.best_history_match)
+
+    def test_none_mode_never_embeds_loads_or_saves_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "cache.json"
+            cache_path.write_text("not valid json", encoding="utf-8")
+
+            def fail_keyword_extractor(_query):
+                raise AssertionError("cache mode none must not extract keywords")
+
+            cache = HistorySemanticCache(
+                ExplodingEmbedder(),
+                cache_path,
+                mode="none",
+                keyword_extractor=fail_keyword_extractor,
+            )
+
+            lookup = cache.lookup("adder request")
+            cache.put("adder request", "module adder; endmodule")
+
+            self.assertEqual(lookup.decision, "disabled")
+            self.assertIsNone(lookup.reusable_entry)
+            self.assertIsNone(lookup.evidence_entry)
+            self.assertEqual(lookup.candidate_count, 0)
+            self.assertEqual(cache_path.read_text(encoding="utf-8"), "not valid json")
 
 
 if __name__ == "__main__":

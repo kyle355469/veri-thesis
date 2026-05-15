@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable, List, Optional
 
+from .generation import AttemptFeedback
 from .history_cache import CacheLookup
 from .siliconmind_utils import SYS_PROMPT_INTERNAL_WORKFLOW, wrap_code, wrap_text
 from .types import Diagnostic, RetrievalHit, RtlTask
@@ -19,7 +20,21 @@ TOOL_CALL_GUIDE = """If tool calling is available, use tools before the final an
 def _return_format(target_hdl: str) -> str:
     return f"""### Output Format
 Return only one fenced {target_hdl} code block containing the complete RTL.
-Do not include explanations, diagnostics, markdown outside the code block, or extra text."""
+Start the response immediately with ```{target_hdl}.
+Do not include explanations, diagnostics, markdown outside the code block, or extra text.
+If the problem is difficult, still output the simplest complete compilable RTL that matches the requested interface."""
+
+
+def _compact_task_text(task: RtlTask) -> str:
+    constraints = "\n".join(f"- {item}" for item in task.constraints) if task.constraints else "- Follow the user prompt exactly."
+    signature = task.module_signature or "Not provided."
+    return f"""Target HDL: {task.target_hdl}
+Module signature: {signature}
+Constraints:
+{constraints}
+
+User request:
+{wrap_text(task.prompt)}"""
 
 
 def _format_hit(hit: RetrievalHit, index: int) -> str:
@@ -68,19 +83,14 @@ Score: {history_lookup.score:.4f}
 def build_generation_prompt(
     task: RtlTask,
     hits: List[RetrievalHit],
-    diagnostics: Optional[List[Diagnostic]] = None,
+    feedback: Optional[AttemptFeedback] = None,
     history_lookup: Optional[CacheLookup] = None,
 ) -> str:
     constraints = "\n".join(f"- {item}" for item in task.constraints) if task.constraints else "- Follow the user prompt exactly."
     signature = task.module_signature or "Not provided."
     retrieved = "\n\n".join(_format_hit(hit, index + 1) for index, hit in enumerate(hits))
     history_evidence = _format_history_evidence(history_lookup)
-    diagnostic_text = format_diagnostics(diagnostics or [])
-    repair_instruction = (
-        "\nRepair the previous RTL using the diagnostics. Preserve the requested interface."
-        if diagnostic_text
-        else ""
-    )
+    retry_text = _format_generation_retry_feedback(feedback, task.target_hdl)
     return f"""{SYSTEM_PROMPT}
 
 {TOOL_CALL_GUIDE}
@@ -100,10 +110,31 @@ User request:
 ### Semantic History Evidence
 {history_evidence}
 
-### Verification Diagnostics
-{diagnostic_text or "No verification diagnostics available."}
-{repair_instruction}
+{retry_text}
 
+{_return_format(task.target_hdl)}"""
+
+
+def build_emergency_generation_prompt(
+    task: RtlTask,
+    previous_model_text: str = "",
+) -> str:
+    previous = previous_model_text.strip()
+    previous_note = (
+        f"\nPrevious non-code response preview:\n{wrap_text(previous[-1200:])}\n"
+        if previous
+        else ""
+    )
+    return f"""The previous response did not contain a parsable fenced HDL code block, or it spent too much output budget before producing RTL.
+
+Output a minimal complete Verilog/SystemVerilog implementation now.
+No reasoning. No explanation. No diagnostics. No markdown except the single fenced code block.
+Start immediately with ```{task.target_hdl} and end with ```.
+Prefer a simple compilable implementation over an optimized one.
+
+### Verilog Coding Problem
+{_compact_task_text(task)}
+{previous_note}
 {_return_format(task.target_hdl)}"""
 
 
@@ -112,17 +143,12 @@ def build_second_edition_prompt(
     first_edition_rtl: str,
     first_edition_datapath: str,
     structure_hits: List[RetrievalHit],
-    diagnostics: Optional[List[Diagnostic]] = None,
+    feedback: Optional[AttemptFeedback] = None,
 ) -> str:
     constraints = "\n".join(f"- {item}" for item in task.constraints) if task.constraints else "- Follow the user prompt exactly."
     signature = task.module_signature or "Not provided."
     retrieved = "\n\n".join(_format_hit(hit, index + 1) for index, hit in enumerate(structure_hits))
-    diagnostic_text = format_diagnostics(diagnostics or [])
-    repair_instruction = (
-        "\nRepair the second-edition RTL using the diagnostics. Preserve the requested interface and verified behavior."
-        if diagnostic_text
-        else ""
-    )
+    retry_text = _format_second_edition_retry_feedback(feedback, task.target_hdl)
     return f"""{SYSTEM_PROMPT}
 
 {TOOL_CALL_GUIDE}
@@ -145,10 +171,77 @@ User request:
 ### Retrieved Code-Structure Context
 {retrieved or "No code-structure documents available."}
 
-### Verification Diagnostics
-{diagnostic_text or "No verification diagnostics available."}
-{repair_instruction}
+{retry_text}
 
 Produce a second-edition RTL implementation. Keep the same external behavior and interface, but use the datapath and code-structure context to improve structural alignment.
 
 {_return_format(task.target_hdl)}"""
+
+
+def build_emergency_second_edition_prompt(
+    task: RtlTask,
+    first_edition_rtl: str,
+    previous_model_text: str = "",
+) -> str:
+    previous = previous_model_text.strip()
+    previous_note = (
+        f"\nPrevious non-code response preview:\n{wrap_text(previous[-1200:])}\n"
+        if previous
+        else ""
+    )
+    return f"""The previous second-edition response did not contain a parsable fenced HDL code block, or it spent too much output budget before producing RTL.
+
+Output a complete second-edition RTL implementation now.
+No reasoning. No explanation. No diagnostics. No markdown except the single fenced code block.
+Start immediately with ```{task.target_hdl} and end with ```.
+If uncertain, preserve the verified first-edition RTL behavior and interface.
+
+### Verilog Coding Problem
+{_compact_task_text(task)}
+
+### Verified First-Edition RTL
+{wrap_code(first_edition_rtl, task.target_hdl)}
+{previous_note}
+{_return_format(task.target_hdl)}"""
+
+
+def _format_generation_retry_feedback(
+    feedback: Optional[AttemptFeedback],
+    target_hdl: str,
+) -> str:
+    if feedback is None:
+        return """### Verification Diagnostics
+No verification diagnostics available."""
+    if feedback.kind == "extraction":
+        return f"""### Retry Instruction
+The previous response did not contain a parsable fenced HDL code block. Do not include reasoning, analysis, explanations, or extra markdown. Return exactly one fenced {target_hdl} code block containing the complete final RTL."""
+
+    diagnostic_text = format_diagnostics(feedback.diagnostics)
+    return f"""### Previous RTL
+{wrap_code(feedback.previous_rtl, target_hdl)}
+
+### Verification Diagnostics
+{diagnostic_text or "No verification diagnostics available."}
+
+Repair the previous RTL using the diagnostics. Preserve the requested interface and return only the corrected complete RTL."""
+
+
+def _format_second_edition_retry_feedback(
+    feedback: Optional[AttemptFeedback],
+    target_hdl: str,
+) -> str:
+    if feedback is None:
+        return """### Verification Diagnostics
+No verification diagnostics available."""
+    if feedback.kind == "extraction":
+        return f"""### Retry Instruction
+The previous response did not contain a parsable fenced HDL code block. Do not include reasoning, analysis, explanations, or extra markdown. Return exactly one fenced {target_hdl} code block containing the complete final RTL."""
+
+    diagnostic_text = format_diagnostics(feedback.diagnostics)
+    return f"""### Previous Second-Edition RTL
+{wrap_code(feedback.previous_rtl, target_hdl)}
+
+### Verification Diagnostics
+{diagnostic_text or "No verification diagnostics available."}
+
+Repair the second-edition RTL using the diagnostics. Preserve the requested interface and verified behavior, and return only the corrected complete RTL."""

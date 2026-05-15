@@ -12,7 +12,7 @@ from ..history_cache import CacheLookup, HistorySemanticCache, LlmKeywordExtract
 from ..json_utils import append_jsonl, dumps_json
 from ..llm import VllmClient
 from ..monitor import Monitor
-from ..prompting import build_generation_prompt
+from ..prompting import build_emergency_generation_prompt, build_generation_prompt
 from ..retrieval_context import RetrievalContext
 from ..types import PipelineResponse, RetrievalHit, RtlTask, VerificationReport
 from ..vector_store import VectorStore
@@ -119,18 +119,22 @@ class RagRtlPipeline:
         stage_result = self._generation_stage().run(
             task=task,
             max_attempts=task.max_repair_attempts,
-            build_prompt=lambda diagnostics, attempt: build_generation_prompt(
+            build_prompt=lambda feedback, attempt: build_generation_prompt(
                 task,
                 hits,
-                diagnostics,
+                feedback,
                 cache_lookup if cache_lookup.evidence_entry and not attempt else None,
             ),
             llm_actions=llm_actions,
             timings=timings,
-            action_metadata=lambda attempt, _diagnostics: {
+            action_metadata=lambda attempt, _feedback: {
                 "with_history_evidence": bool(cache_lookup.evidence_entry and not attempt),
                 "tool_calling_enabled": self.tool_config.enabled,
             },
+            build_emergency_prompt=lambda model_text, _attempt, _feedback: build_emergency_generation_prompt(
+                task,
+                model_text,
+            ),
             on_failed_attempt=lambda rtl, verification, attempt, final_attempt: self._log_failed_attempt(
                 task=task,
                 rtl=rtl,

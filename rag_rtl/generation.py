@@ -12,8 +12,17 @@ from .tool_calling import RTL_TOOL_SCHEMAS
 from .types import Diagnostic, RtlTask, VerificationReport
 
 
-PromptBuilder = Callable[[Optional[List[Diagnostic]], int], str]
-ActionMetadata = Callable[[int, Optional[List[Diagnostic]]], Dict[str, Any]]
+@dataclass(frozen=True)
+class AttemptFeedback:
+    kind: str
+    diagnostics: List[Diagnostic]
+    previous_rtl: str
+    previous_model_text_preview: str
+
+
+PromptBuilder = Callable[[Optional[AttemptFeedback], int], str]
+EmergencyPromptBuilder = Callable[[str, int, Optional[AttemptFeedback]], str]
+ActionMetadata = Callable[[int, Optional[AttemptFeedback]], Dict[str, Any]]
 FailureRecorder = Callable[[str, VerificationReport, int, bool], None]
 VerboseLogger = Callable[[str, Dict[str, Any]], None]
 
@@ -111,17 +120,19 @@ class RtlGenerationStage:
         llm_actions: List[Dict[str, Any]],
         timings: Dict[str, float],
         action_metadata: Optional[ActionMetadata] = None,
+        build_emergency_prompt: Optional[EmergencyPromptBuilder] = None,
         on_failed_attempt: Optional[FailureRecorder] = None,
     ) -> StageRunResult:
+        feedback: Optional[AttemptFeedback] = None
         diagnostics: List[Diagnostic] = []
         rtl = ""
         verification = VerificationReport(False, False, [])
         repair_attempts = 0
 
         for attempt in range(max_attempts + 1):
-            repair_diagnostics = diagnostics if attempt else None
-            prompt = build_prompt(repair_diagnostics, attempt)
-            self._record_generation_attempt(llm_actions, attempt, repair_diagnostics, action_metadata)
+            attempt_feedback = feedback if attempt else None
+            prompt = build_prompt(attempt_feedback, attempt)
+            self._record_generation_attempt(llm_actions, attempt, attempt_feedback, action_metadata)
             self.verbose(self.actions.prompt_event, {"attempt": attempt, "prompt": prompt})
 
             t0 = time.perf_counter()
@@ -131,6 +142,34 @@ class RtlGenerationStage:
             rtl = extract_code(model_text)
             self.verbose(self.actions.extracted_event, {"attempt": attempt, "rtl": rtl})
             self._record_extracted_rtl(llm_actions, attempt, rtl)
+
+            if not rtl and build_emergency_prompt is not None and attempt >= max_attempts:
+                emergency_prompt = build_emergency_prompt(model_text, attempt, attempt_feedback)
+                self._record_emergency_retry(llm_actions, attempt, model_text)
+                self.verbose(
+                    self.actions.prompt_event,
+                    {"attempt": attempt, "emergency": True, "prompt": emergency_prompt},
+                )
+                emergency_text = self._complete_without_tools(
+                    emergency_prompt,
+                    llm_actions,
+                    attempt,
+                )
+                self.verbose(
+                    self.actions.raw_event,
+                    {"attempt": attempt, "emergency": True, "text": emergency_text},
+                )
+                self._record_raw_model_text(llm_actions, attempt, emergency_text)
+                emergency_rtl = extract_code(emergency_text)
+                self.verbose(
+                    self.actions.extracted_event,
+                    {"attempt": attempt, "emergency": True, "rtl": emergency_rtl},
+                )
+                self._record_extracted_rtl(llm_actions, attempt, emergency_rtl)
+                model_text = emergency_text
+                if emergency_rtl:
+                    rtl = emergency_rtl
+
             timings[self.actions.llm_timing_key.format(attempt=attempt)] = time.perf_counter() - t0
 
             t0 = time.perf_counter()
@@ -146,6 +185,12 @@ class RtlGenerationStage:
             self._record_verification(llm_actions, attempt, verification)
             if verification.passed:
                 break
+            feedback = AttemptFeedback(
+                kind="extraction" if not rtl else "verification",
+                diagnostics=diagnostics,
+                previous_rtl=rtl,
+                previous_model_text_preview=preview_text(model_text, limit=1200),
+            )
             if on_failed_attempt:
                 on_failed_attempt(rtl, verification, attempt, attempt >= max_attempts)
 
@@ -198,16 +243,42 @@ class RtlGenerationStage:
             ),
         )
 
+    def _complete_without_tools(
+        self,
+        prompt: str,
+        llm_actions: List[Dict[str, Any]],
+        attempt: int,
+    ) -> str:
+        model_text = self.llm.complete(
+            prompt,
+            temperature=min(self.runtime_config.generation_temperature, 0.1),
+            max_tokens=self.runtime_config.max_tokens,
+        )
+        if self.actions.final_response_action:
+            llm_actions.append(
+                {
+                    "action": "emergency_llm_final_response",
+                    "attempt": attempt,
+                    "used_tools": False,
+                    "content": model_text,
+                    "content_preview": preview_text(model_text),
+                }
+            )
+        return model_text
+
     def _record_generation_attempt(
         self,
         llm_actions: List[Dict[str, Any]],
         attempt: int,
-        repair_diagnostics: Optional[List[Diagnostic]],
+        feedback: Optional[AttemptFeedback],
         action_metadata: Optional[ActionMetadata],
     ) -> None:
-        metadata = {"with_repair_diagnostics": bool(repair_diagnostics)}
+        metadata = {
+            "with_repair_diagnostics": bool(feedback and feedback.diagnostics),
+            "retry_kind": feedback.kind if feedback else None,
+        }
         if action_metadata:
-            metadata.update(action_metadata(attempt, repair_diagnostics))
+            metadata.update(action_metadata(attempt, feedback))
         llm_actions.append(
             {
                 "action": self.actions.generation_action,
@@ -248,6 +319,24 @@ class RtlGenerationStage:
                 "description": self.actions.extraction_description,
                 "rtl": rtl,
                 "rtl_preview": preview_text(rtl),
+            }
+        )
+
+    def _record_emergency_retry(
+        self,
+        llm_actions: List[Dict[str, Any]],
+        attempt: int,
+        model_text: str,
+    ) -> None:
+        llm_actions.append(
+            {
+                "action": "emergency_extraction_retry",
+                "attempt": attempt,
+                "description": (
+                    "The first response in this attempt contained no extractable RTL, "
+                    "so the pipeline asked for a compact code-only answer before verification."
+                ),
+                "previous_content_preview": preview_text(model_text),
             }
         )
 

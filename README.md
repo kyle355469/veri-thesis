@@ -99,6 +99,7 @@ Build a vector index from a JSONL corpus.
 | `--output OUTPUT` | `indexes/rtl_hash` | Output directory for `vectors.npy` and `documents.jsonl`. |
 | `--embedder EMBEDDER` | `hash` | Embedder name, either `hash` or a supported sentence-transformers model name. |
 | `--limit LIMIT` | none | Index only the first `LIMIT` records. |
+| `--jobs JOBS` | `1` | Number of parallel embedding workers. |
 
 Example:
 
@@ -107,7 +108,8 @@ python3 -m rag_rtl.cli index \
   --corpus merged.jsonl \
   --output indexes/rtl_hash \
   --embedder hash \
-  --limit 1000
+  --limit 1000 \
+  --jobs 4
 ```
 
 ### `datapath-index`
@@ -153,6 +155,8 @@ Run the thesis fixed pipeline shown in `thesis-fixed-pipe-flow.png`:
 | `--structure-retrieve-k STRUCTURE_RETRIEVE_K` | `8` | Number of graph VectorDB hits before reranking. |
 | `--structure-context-k STRUCTURE_CONTEXT_K` | `4` | Number of reranked graph examples sent to the LLM. |
 | `--second-edition-repair-attempts SECOND_EDITION_REPAIR_ATTEMPTS` | `1` | Repair attempts for second-edition verification failures. |
+| `--generation-temperature GENERATION_TEMPERATURE` | `0.4` | Sampling temperature for first- and second-edition RTL generation. |
+| `--max-tokens MAX_TOKENS` | `2048` | Maximum output tokens requested from vLLM for each generation call. |
 | `--yosys-bin YOSYS_BIN` | `yosys` | Yosys executable used for the graph build. |
 | `--yosys-timeout-s YOSYS_TIMEOUT_S` | `30` | Yosys graph-build timeout in seconds. |
 
@@ -186,11 +190,13 @@ Generate one RTL answer with retrieval, semantic cache, verification, repair, an
 | `--max-repair-attempts MAX_REPAIR_ATTEMPTS` | `1` | Number of verification-feedback repair attempts after the first generation. |
 | `--cache CACHE` | `data/history_cache.json` | History semantic cache JSON path. |
 | `--monitor MONITOR` | `runs/monitor.jsonl` | Monitor/verbose event JSONL path. |
-| `--cache-mode {keywords,direct}` | `keywords` | `keywords` asks the LLM for Verilog-focused keywords, filters history by keyword overlap, then scores only those candidates; `direct` scores every cached prompt. |
+| `--cache-mode {keywords,direct,none}` | `keywords` | `keywords` asks the LLM for Verilog-focused keywords, filters history by keyword overlap, then scores only those candidates; `direct` scores every cached prompt; `none` disables history lookup and saving. |
 | `--cache-reuse-threshold CACHE_REUSE_THRESHOLD` | `0.95` | Similarity needed to directly reuse cached RTL. |
 | `--cache-evidence-threshold CACHE_EVIDENCE_THRESHOLD` | `0.88` | Similarity needed to pass a cache entry as LLM evidence. |
 | `--failed-log FAILED_LOG` | `runs/failed_attempts.jsonl` | JSONL file for generated attempts that fail verification. |
 | `--verbose-generation` | off | Print and log prompts, raw model text, extracted RTL, and diagnostics. |
+| `--generation-temperature GENERATION_TEMPERATURE` | `0.4` | Sampling temperature for RTL generation. Lower values such as `0.1` are useful for hard code-only tasks. |
+| `--max-tokens MAX_TOKENS` | `2048` | Maximum output tokens requested from vLLM for each generation call. Increase for large RTL modules. |
 | `--enable-tool-calling` | off | Let vLLM call local RTL tools during generation. Available tools are retrieval, Yosys, Verilator, and full verification. |
 | `--tool-choice TOOL_CHOICE` | `auto` | vLLM `tool_choice` value, such as `auto` or `required`. |
 | `--max-tool-rounds MAX_TOOL_ROUNDS` | `4` | Maximum tool-call/result turns before forcing a final answer. |
@@ -198,6 +204,8 @@ Generate one RTL answer with retrieval, semantic cache, verification, repair, an
 | `--top-module TOP_MODULE` | none | Optional top module for Yosys hierarchy and test command placeholder. |
 | `--test-command TEST_COMMAND` | none | External verifier command template using `{rtl}`, `{testbench}`, and `{top}`. |
 | `--json-report JSON_REPORT` | none | Write a readable JSON report with `summary`, `task`, `llm_actions`, `cache`, `retrieval`, `verification`, `timings`, and `rtl` sections. |
+
+If a generation attempt returns no parsable HDL, the pipeline performs one compact emergency retry before verification. That fallback removes retrieved context and diagnostics, starts with a code-only instruction, and records an `emergency_extraction_retry` action in reports.
 
 Generation uses these vLLM environment variables:
 
@@ -265,16 +273,16 @@ python3 -m rag_rtl.cli generate \
 
 ### `evaluate`
 
-Run a JSONL prompt set through one baseline mode.
+Run a JSON or JSONL prompt set through one baseline mode.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--tasks TASKS` | required | JSONL file with at least a `prompt` field per row. |
+| `--tasks TASKS` | required | JSON/JSONL records with a `prompt` or `spec` field. |
 | `--index INDEX` | `indexes/rtl_hash` | Vector index directory to load. |
 | `--embedder EMBEDDER` | `hash` | Embedder used by retrieval/cache. |
 | `--mode {llm_only,rag,rag_cache_verify}` | `rag_cache_verify` | Baseline mode. |
 | `--output OUTPUT` | `runs/evaluation.json` | Summary and per-task records JSON. |
-| `--cache-mode {keywords,direct}` | `keywords` | Cache workflow for `rag_cache_verify`; keyword mode uses LLM-extracted Verilog keywords as the candidate gate before similarity. |
+| `--cache-mode {keywords,direct,none}` | `keywords` | Cache workflow for `rag_cache_verify`; keyword mode uses LLM-extracted Verilog keywords as the candidate gate before similarity; `none` disables history lookup and saving. |
 | `--cache-reuse-threshold CACHE_REUSE_THRESHOLD` | `0.95` | Similarity needed to directly reuse cached RTL. |
 | `--cache-evidence-threshold CACHE_EVIDENCE_THRESHOLD` | `0.88` | Similarity needed to pass a cache entry as evidence. |
 
@@ -296,6 +304,8 @@ python3 -m rag_rtl.cli evaluate \
   --cache-mode keywords \
   --output runs/evaluation.json
 ```
+
+JSON arrays such as `small_set.json` are also accepted when each record has a `spec` field. Any `golden`/reference code in that file is ignored by `evaluate`; use `stg-evaluate` when you want generated RTL checked against golden RTL.
 
 ## Script Examples
 
@@ -442,7 +452,7 @@ Use the same prompt set across these modes:
 
 Recommended metrics: syntax pass rate, lint pass rate, repair success rate, retrieval relevance, cache hit accuracy, and latency by stage.
 
-Run a baseline evaluation with a JSONL file containing one prompt per row:
+Run a baseline evaluation with a JSON or JSONL file containing one prompt/spec per record:
 
 ```json
 {"prompt": "Design a Verilog inverter module named invert with input i and output o."}
@@ -456,4 +466,4 @@ python3 -m rag_rtl.cli evaluate \
   --output runs/evaluation.json
 ```
 
-Supported modes are `llm_only`, `rag`, and `rag_cache_verify`. The semantic cache uses LLM keyword prefiltering by default, so cosine similarity is computed only for keyword-matched history entries; pass `--cache-mode direct` to evaluate direct cosine matching over the full cache.
+Supported modes are `llm_only`, `rag`, and `rag_cache_verify`. The semantic cache uses LLM keyword prefiltering by default, so cosine similarity is computed only for keyword-matched history entries; pass `--cache-mode direct` to evaluate direct cosine matching over the full cache, or `--cache-mode none` to skip history similarity and avoid saving successful generations.

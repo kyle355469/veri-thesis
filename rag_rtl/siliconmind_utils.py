@@ -27,9 +27,12 @@ Otherwise, write [DESIGN IS CORRECT]."""
 SYS_PROMPT_QUANT_TEST_PT2 = """Fix the attempted Verilog design using the provided error analysis.
 Think internally about the correction, then output only the corrected Verilog code in a fenced code block."""
 
+ANSWER_BLOCK_RE = re.compile(r"<answer\b[^>]*>(.*?)</answer>", re.IGNORECASE | re.DOTALL)
 CODE_BLOCK_RE = re.compile(
-    r"```(?:verilog|systemverilog|sv)?\s*(.*?)```",
-    re.IGNORECASE | re.DOTALL,
+    r"^[ \t]*```[ \t]*(?:verilog|systemverilog|sv)?[ \t]*\r?\n"
+    r"(.*?)"
+    r"^[ \t]*```[ \t]*(?:\r?\n|$)",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
 )
 
 
@@ -38,6 +41,14 @@ def parse_text(text: str) -> str:
 
 
 def parse_code(text: str) -> str:
+    for answer_match in reversed(list(ANSWER_BLOCK_RE.finditer(text))):
+        answer_code = _parse_fenced_code(answer_match.group(1))
+        if answer_code:
+            return answer_code
+    return _parse_fenced_code(text)
+
+
+def _parse_fenced_code(text: str) -> str:
     matches = list(CODE_BLOCK_RE.finditer(text))
     if matches:
         return matches[-1].group(1).strip()
