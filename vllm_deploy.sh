@@ -3,18 +3,20 @@ set -e
 
 # MODEL="Qwen/Qwen3-8B"
 # MODEL="Qwen/Qwen3-4B-Thinking-2507-FP8"
-MODEL="AS-SiliconMind/SiliconMind-V1-Qwen3-4B-T-2507"
-SERVED_NAME="siliconmind-server"
-PORT=8000
+MODEL="${MODEL:-AS-SiliconMind/SiliconMind-V1-Qwen3-4B-T-2507}"
+SERVED_NAME="${SERVED_NAME:-siliconmind-server}"
+HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-8000}"
 ENABLE_TOOL_CALLING="${ENABLE_TOOL_CALLING:-0}"
 TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-hermes}"
 CHAT_TEMPLATE="${CHAT_TEMPLATE:-}"
-
-# Optional: choose GPU
-export CUDA_VISIBLE_DEVICES=0
+DTYPE="${DTYPE:-auto}"
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.93}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-131072}"
+TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-8}"
 
 # Optional: Hugging Face cache path
-export HF_HOME="$HOME/.cache/huggingface"
+export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
 
 
 TOOL_ARGS=()
@@ -32,12 +34,18 @@ fi
 # For tool calling, run with ENABLE_TOOL_CALLING=1 and set TOOL_CALL_PARSER
 # to the parser recommended by your model/chat template. Set CHAT_TEMPLATE
 # only when your model needs an explicit tool-use template.
+echo "Starting vLLM on ${HOST}:${PORT}"
+echo "Model: ${MODEL}"
+echo "Served model name: ${SERVED_NAME}"
+echo "Tensor parallel size: ${TENSOR_PARALLEL_SIZE}"
+echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 vllm serve "$MODEL" \
+  --tensor-parallel-size "$TENSOR_PARALLEL_SIZE" \
   --served-model-name "$SERVED_NAME" \
-  --host 0.0.0.0 \
+  --host "$HOST" \
   --port "$PORT" \
-  --dtype auto \
+  --dtype "$DTYPE" \
   --trust-remote-code \
-  --gpu-memory-utilization 0.93 \
-  --max-model-len 131072 \
+  --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
+  --max-model-len "$MAX_MODEL_LEN" \
   "${TOOL_ARGS[@]}"

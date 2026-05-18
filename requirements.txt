@@ -52,7 +52,7 @@ decorator==5.1.1
 defer==1.0.6
 defusedxml==0.7.1
 Deprecated==1.2.14
-devscripts===2.22.1ubuntu1
+devscripts===2.22.1
 dill==0.3.8
 distro==1.7.0
 distro-info==1.1+ubuntu0.2
@@ -70,7 +70,7 @@ fastjsonschema==2.20.0
 fonttools==4.53.1
 fqdn==1.5.1
 future==1.0.0
-gpg===1.16.0-unknown
+gpg===1.16.0
 h11==0.14.0
 httpcore==1.0.5
 httplib2==0.20.2

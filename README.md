@@ -311,6 +311,62 @@ JSON arrays such as `small_set.json` are also accepted when each record has a `s
 
 The files under `scripts/` are thin wrappers around the same CLI, plus a concurrent request driver. They are not marked executable in this checkout, so the examples call them with `python3`. Run `bash vllm_deploy.sh` for the server script.
 
+### NCHC Slurm vLLM Server
+
+Submit the OpenAI-compatible vLLM server from an NCHC login node:
+
+```bash
+./submit_vllm_sbatch.sh
+```
+
+Useful overrides can be passed through the Slurm environment:
+
+```bash
+MODEL=AS-SiliconMind/SiliconMind-V1-Qwen3-4B-T-2507 \
+SERVED_NAME=siliconmind-server \
+PORT=8000 \
+./submit_vllm_sbatch.sh
+```
+
+If your NCHC project requires a partition or account, edit `scripts/vllm_server.sbatch` and uncomment the matching `#SBATCH --partition` / `#SBATCH --account` lines, or pass them at submit time:
+
+```bash
+./submit_vllm_sbatch.sh --partition gpu --account YOUR_PROJECT_ID
+```
+
+Check the job and logs:
+
+```bash
+squeue -j <job-id>
+tail -f runs/slurm/vllm-<job-id>.out
+```
+
+After the job is `RUNNING`, create the route from your local computer to the compute node through the NCHC login node:
+
+```bash
+bash forward.sh <user>@<nchc-login-host> <job-id>
+```
+
+This forwards:
+
+```text
+local computer localhost:8000 -> NCHC login node -> Slurm compute node:8000
+```
+
+Then your local client should use:
+
+```bash
+export VLLM_BASE_URL=http://localhost:8000/v1
+export VLLM_MODEL=siliconmind-server
+export VLLM_API_KEY=EMPTY
+```
+
+Quick health check from your local computer:
+
+```bash
+curl http://localhost:8000/v1/models
+```
+
 ### `vllm_deploy.sh`
 
 Start the local OpenAI-compatible vLLM server on port `8000`:
