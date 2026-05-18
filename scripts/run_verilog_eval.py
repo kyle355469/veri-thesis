@@ -3,8 +3,11 @@
 #   --task spec-to-rtl \
 #   --pipeline fixed-pipe \
 #   --index indexes/rtl_hash \
+#   --cache-mode none \
 #   --code-structure-index indexes/rtl_datapath_hash \
-#   --concurrency 4
+#   --concurrency 16 \
+#   --samples 5 \
+#   --output-dir runs/verilog_eval_nchc/
 
 
 from __future__ import annotations

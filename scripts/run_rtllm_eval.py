@@ -2,8 +2,10 @@
 # python3 scripts/run_rtllm_eval.py \
 #   --pipeline fixed-pipe \
 #   --index indexes/rtl_hash \
+#   --cache-mode none \
 #   --code-structure-index indexes/rtl_datapath_hash \
-#   --concurrency 4 \
+#   --concurrency 16 \
+#   --samples 5 \
 #   --output-dir runs/rtllm_eval \
 
 from __future__ import annotations
