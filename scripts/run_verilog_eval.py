@@ -33,7 +33,7 @@ if str(REPO_ROOT) not in sys.path:
 from rag_rtl.config import CacheConfig, FixedPipeConfig, RuntimeConfig, ToolCallingConfig
 from rag_rtl.embeddings import make_embedder
 from rag_rtl.json_utils import dumps_json
-from rag_rtl.llm import extract_code
+from rag_rtl.llm import VllmClient, extract_code
 from rag_rtl.pipeline import FixedPipeRtlPipeline, RagRtlPipeline
 from rag_rtl.types import PipelineResponse, RtlTask, VerificationReport
 from rag_rtl.vector_store import VectorStore
@@ -117,6 +117,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cache-evidence-threshold", type=float, default=0.88)
     parser.add_argument("--generation-temperature", type=float, default=0.2)
     parser.add_argument("--max-tokens", type=int, default=16384)
+    parser.add_argument(
+        "--serving-url",
+        "--base-url",
+        dest="serving_url",
+        help="OpenAI-compatible serving base URL. Overrides VLLM_BASE_URL.",
+    )
     parser.add_argument("--verbose-generation", action="store_true")
     parser.add_argument("--enable-tool-calling", action="store_true")
     parser.add_argument("--tool-choice", default="auto")
@@ -210,6 +216,7 @@ def extract_topmodule_signature(prompt: str) -> Optional[str]:
 
 def build_pipeline(args: argparse.Namespace) -> Any:
     embedder = make_embedder(args.embedder)
+    llm_client = build_llm_client(args)
     verifier = RtlVerifier()
     cache_config = CacheConfig(
         path=args.cache,
@@ -237,6 +244,7 @@ def build_pipeline(args: argparse.Namespace) -> Any:
             spec_store=spec_store,
             code_structure_store=structure_store,
             embedder=embedder,
+            llm_client=llm_client,
             verifier=verifier,
             cache_config=cache_config,
             runtime_config=runtime_config,
@@ -247,11 +255,19 @@ def build_pipeline(args: argparse.Namespace) -> Any:
     return RagRtlPipeline(
         store=spec_store,
         embedder=embedder,
+        llm_client=llm_client,
         verifier=verifier,
         cache_config=cache_config,
         runtime_config=runtime_config,
         tool_config=tool_config,
     )
+
+
+def build_llm_client(args: argparse.Namespace) -> VllmClient:
+    client = VllmClient.from_env()
+    if args.serving_url:
+        client.base_url = args.serving_url
+    return client
 
 
 def build_task(problem: VerilogEvalProblem, args: argparse.Namespace) -> RtlTask:
@@ -268,6 +284,7 @@ def build_task(problem: VerilogEvalProblem, args: argparse.Namespace) -> RtlTask
         constraints=constraints,
         max_repair_attempts=args.max_repair_attempts,
         top_module=args.top_module,
+        prompt_profile=getattr(args, "prompt_profile", "rag"),
     )
 
 

@@ -33,6 +33,7 @@ class RtlTask:
     constraints: List[str] = field(default_factory=list)
     max_repair_attempts: int = 1
     top_module: Optional[str] = None
+    prompt_profile: str = "rag"
 
 
 @dataclass

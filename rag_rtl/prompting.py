@@ -9,6 +9,9 @@ from .types import Diagnostic, RetrievalHit, RtlTask
 
 SYSTEM_PROMPT = SYS_PROMPT_INTERNAL_WORKFLOW
 
+MODEL_ONLY_PROMPT = """Generate the requested Verilog/SystemVerilog implementation.
+Think internally if needed, but return only the final code."""
+
 TOOL_CALL_GUIDE = """If tool calling is available, use tools before the final answer when they help:
 1. Call retrieve_rtl_context only when the provided context is insufficient or diagnostics suggest a missing pattern.
 2. Draft the candidate RTL internally.
@@ -86,33 +89,46 @@ def build_generation_prompt(
     feedback: Optional[AttemptFeedback] = None,
     history_lookup: Optional[CacheLookup] = None,
 ) -> str:
+    profile = task.prompt_profile
     constraints = "\n".join(f"- {item}" for item in task.constraints) if task.constraints else "- Follow the user prompt exactly."
     signature = task.module_signature or "Not provided."
     retrieved = "\n\n".join(_format_hit(hit, index + 1) for index, hit in enumerate(hits))
     history_evidence = _format_history_evidence(history_lookup)
-    retry_text = _format_generation_retry_feedback(feedback, task.target_hdl)
-    return f"""{SYSTEM_PROMPT}
+    retry_text = "" if profile == "model" and feedback is None else _format_generation_retry_feedback(feedback, task.target_hdl)
+    header_parts = [MODEL_ONLY_PROMPT if profile == "model" else SYSTEM_PROMPT]
+    if profile in {"tool", "full"}:
+        header_parts.append(TOOL_CALL_GUIDE)
 
-{TOOL_CALL_GUIDE}
-
-### Verilog Coding Problem
+    problem_title = "### Verilog Coding Problem" if profile != "model" else "### Coding Problem"
+    problem_section = f"""{problem_title}
 Target HDL: {task.target_hdl}
 Module signature: {signature}
 Constraints:
 {constraints}
 
 User request:
-{wrap_text(task.prompt)}
+{wrap_text(task.prompt)}"""
 
-### Retrieved Context
-{retrieved or "No retrieved documents available."}
+    context_sections = []
+    if profile in {"rag", "full"}:
+        context_sections.extend(
+            [
+                f"""### Retrieved Context
+{retrieved or "No retrieved documents available."}""",
+                f"""### Semantic History Evidence
+{history_evidence}""",
+            ]
+        )
 
-### Semantic History Evidence
-{history_evidence}
-
-{retry_text}
-
-{_return_format(task.target_hdl)}"""
+    return "\n\n".join(
+        [
+            *header_parts,
+            problem_section,
+            *context_sections,
+            retry_text,
+            _return_format(task.target_hdl),
+        ]
+    )
 
 
 def build_emergency_generation_prompt(

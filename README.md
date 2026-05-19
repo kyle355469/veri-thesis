@@ -259,6 +259,8 @@ python3 -m rag_rtl.cli generate \
   --json-report runs/latest_report.json
 ```
 
+Benchmark matrix `tool`, `full`, and `all` modes also require a tool-capable vLLM server. If the server was started without `ENABLE_TOOL_CALLING=1` and a matching `TOOL_CALL_PARSER`, the matrix runner performs a preflight check and skips the tool-enabled mode with one actionable error instead of recording every sample as a zero-token generation failure.
+
 Example with an external testbench:
 
 ```bash

@@ -12,8 +12,9 @@ from rag_rtl.config import CacheConfig, RuntimeConfig, ToolCallingConfig
 from rag_rtl.embeddings import HashingEmbedder
 from rag_rtl.llm import StubLlmClient
 from rag_rtl.pipeline import RagRtlPipeline
+from rag_rtl.prompting import build_generation_prompt
 from rag_rtl.reporting import build_latest_report
-from rag_rtl.types import Diagnostic, RtlDocument, RtlTask, VerificationReport
+from rag_rtl.types import Diagnostic, RetrievalHit, RtlDocument, RtlTask, VerificationReport
 from rag_rtl.vector_store import build_vector_store
 
 
@@ -108,6 +109,53 @@ def empty_store():
 
 
 class PipelineTests(unittest.TestCase):
+    def test_model_prompt_profile_omits_rag_history_and_tool_sections(self):
+        prompt = build_generation_prompt(
+            RtlTask(
+                prompt="Build module TopModule(input a, output y).",
+                constraints=["Return complete RTL."],
+                prompt_profile="model",
+            ),
+            hits=[],
+        )
+
+        self.assertIn("### Coding Problem", prompt)
+        self.assertIn("Return complete RTL.", prompt)
+        self.assertNotIn("### Retrieved Context", prompt)
+        self.assertNotIn("### Semantic History Evidence", prompt)
+        self.assertNotIn("### Verification Diagnostics", prompt)
+        self.assertNotIn("If tool calling is available", prompt)
+
+    def test_tool_prompt_profile_keeps_tools_but_omits_rag_history_sections(self):
+        prompt = build_generation_prompt(
+            RtlTask(prompt="Build an inverter.", prompt_profile="tool"),
+            hits=[],
+        )
+
+        self.assertIn("If tool calling is available", prompt)
+        self.assertNotIn("### Retrieved Context", prompt)
+        self.assertNotIn("### Semantic History Evidence", prompt)
+
+    def test_rag_prompt_profile_keeps_retrieval_but_omits_tool_instructions(self):
+        hit = RetrievalHit(
+            document=RtlDocument(
+                "invert-doc",
+                "Design inverter",
+                "module invert(input i, output o); assign o = ~i; endmodule",
+            ),
+            score=0.9,
+        )
+
+        prompt = build_generation_prompt(
+            RtlTask(prompt="Build an inverter.", prompt_profile="rag"),
+            hits=[hit],
+        )
+
+        self.assertIn("### Retrieved Context", prompt)
+        self.assertIn("invert-doc", prompt)
+        self.assertIn("### Semantic History Evidence", prompt)
+        self.assertNotIn("If tool calling is available", prompt)
+
     def test_pipeline_runs_with_stub_llm(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
