@@ -387,13 +387,31 @@ def evaluate_with_iverilog(
         str(item.problem.reference_path.resolve()),
     ]
     t0 = time.perf_counter()
-    compile_completed = subprocess.run(
-        compile_command,
-        check=False,
-        capture_output=True,
-        text=True,
-        cwd=work_dir,
-    )
+    try:
+        compile_completed = subprocess.run(
+            compile_command,
+            check=False,
+            capture_output=True,
+            text=True,
+            cwd=work_dir,
+        )
+    except OSError as exc:
+        compile_s = time.perf_counter() - t0
+        result = IverilogResult(
+            passed=False,
+            passfail="I",
+            compile_returncode=None,
+            simulation_returncode=None,
+            mismatches=None,
+            samples=None,
+            compile_command=compile_command,
+            run_command=[],
+            stderr=f"error: failed to start iverilog: {exc}",
+            compile_s=compile_s,
+            error=str(exc),
+        )
+        write_compile_log(log_path, result)
+        return result
     compile_s = time.perf_counter() - t0
     stdout = compile_completed.stdout or ""
     stderr = compile_completed.stderr or ""
@@ -402,25 +420,35 @@ def evaluate_with_iverilog(
     simulation_returncode: Optional[int] = None
     simulation_s = 0.0
     timed_out = False
+    run_error: Optional[str] = None
     if compile_completed.returncode == 0:
         run_command = [str(exe_path)]
         t0 = time.perf_counter()
-        try:
-            run_completed = subprocess.run(
-                run_command,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=args.simulation_timeout_s,
-                cwd=work_dir,
-            )
-            simulation_returncode = run_completed.returncode
-            stdout += run_completed.stdout or ""
-            stderr += run_completed.stderr or ""
-        except subprocess.TimeoutExpired as exc:
-            timed_out = True
-            stdout += exc.stdout or ""
-            stderr += (exc.stderr or "") + f"\nTIMEOUT after {args.simulation_timeout_s}s"
+        if not exe_path.exists():
+            simulation_returncode = -1
+            run_error = f"simulation executable missing after successful compile: {exe_path}"
+            stderr += f"\nerror: {run_error}"
+        else:
+            try:
+                run_completed = subprocess.run(
+                    run_command,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=args.simulation_timeout_s,
+                    cwd=work_dir,
+                )
+                simulation_returncode = run_completed.returncode
+                stdout += run_completed.stdout or ""
+                stderr += run_completed.stderr or ""
+            except subprocess.TimeoutExpired as exc:
+                timed_out = True
+                stdout += exc.stdout or ""
+                stderr += (exc.stderr or "") + f"\nTIMEOUT after {args.simulation_timeout_s}s"
+            except OSError as exc:
+                simulation_returncode = -1
+                run_error = f"failed to run simulation executable {exe_path}: {exc}"
+                stderr += f"\nerror: {run_error}"
         simulation_s = time.perf_counter() - t0
 
     mismatches, nsamples = parse_mismatches(stdout + "\n" + stderr)
@@ -446,12 +474,15 @@ def evaluate_with_iverilog(
         stderr=stderr,
         compile_s=compile_s,
         simulation_s=simulation_s,
+        error=run_error,
     )
     write_compile_log(log_path, result)
     if not args.keep_vcd:
         vcd_path = work_dir / "wave.vcd"
-        if vcd_path.exists():
+        try:
             vcd_path.unlink()
+        except OSError:
+            pass
     return result
 
 
