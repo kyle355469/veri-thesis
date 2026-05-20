@@ -78,7 +78,7 @@ class BenchmarkMatrixTests(unittest.TestCase):
             module.preflight_tool_calling(FailingToolClient(), args, "verilog-eval", "tool")
 
         message = str(caught.exception)
-        self.assertIn("ENABLE_TOOL_CALLING=1 TOOL_CALL_PARSER=hermes bash vllm_deploy.sh", message)
+        self.assertIn("ENABLE_TOOL_CALLING=1 TOOL_CALL_PARSER=qwen3_xml bash vllm_deploy.sh", message)
         self.assertIn("--enable-auto-tool-choice", message)
         self.assertIn("verilog-eval/tool", message)
 

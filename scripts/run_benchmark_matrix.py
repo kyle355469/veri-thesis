@@ -8,7 +8,7 @@
 #   --base-url http://localhost:18000/v1 \
 #   --output-dir runs/benchmark_matrix_codeV > benchmark_matrix_codeV.log 
 # For --mode tool, --mode full, or --mode all, start vLLM first with:
-#   ENABLE_TOOL_CALLING=1 TOOL_CALL_PARSER=hermes bash vllm_deploy.sh
+#   ENABLE_TOOL_CALLING=1 TOOL_CALL_PARSER=qwen3_xml bash vllm_deploy.sh
 """Run Verilog-Eval and RTLLM across model/RAG/tool/full pipeline modes."""
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ TOOL_PREFLIGHT_SCHEMA = [
         },
     }
 ]
-TOOL_SERVER_RESTART_HINT = "ENABLE_TOOL_CALLING=1 TOOL_CALL_PARSER=hermes bash vllm_deploy.sh"
+TOOL_SERVER_RESTART_HINT = "ENABLE_TOOL_CALLING=1 TOOL_CALL_PARSER=qwen3_xml bash vllm_deploy.sh"
 MODE_ALIASES = {
     "full-pipeline": "full",
     "only-model": "model",

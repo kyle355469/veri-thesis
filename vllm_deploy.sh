@@ -2,7 +2,8 @@
 set -e
 
 # MODEL="${MODEL:-Qwen/Qwen3.5-4B}"
-MODEL="${MODEL:-zhuyaoyu/CodeV-R1-RL-Qwen-7B}"
+# MODEL="${MODEL:-zhuyaoyu/CodeV-R1-RL-Qwen-7B}"
+MODEL="${MODEL:-AS-SiliconMind/SiliconMind-V1-Qwen3-4B-T-2507}"
 SERVED_NAME="${SERVED_NAME:-siliconmind-server}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
@@ -14,7 +15,7 @@ GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.93}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 if [ -z "${TOOL_CALL_PARSER:-}" ]; then
   case "$MODEL" in
-    Qwen/*) TOOL_CALL_PARSER=qwen3_xml ;;
+    Qwen/*|*Qwen*|*qwen*) TOOL_CALL_PARSER=qwen3_xml ;;
     *) TOOL_CALL_PARSER=hermes ;;
   esac
 fi
@@ -50,7 +51,7 @@ echo "Served model name: ${SERVED_NAME}"
 echo "Tensor parallel size: ${TENSOR_PARALLEL_SIZE}"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 vllm serve "$MODEL" \
-  --tensor-parallel-size "$TENSOR_PARALLEL_SIZE" \
+#  --tensor-parallel-size "$TENSOR_PARALLEL_SIZE" \
   --served-model-name "$SERVED_NAME" \
   --host "$HOST" \
   --port "$PORT" \

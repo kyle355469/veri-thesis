@@ -220,7 +220,7 @@ For automatic tool calling, start vLLM with a tool-compatible parser and chat te
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `ENABLE_TOOL_CALLING` | `0` | Set to `1` to add vLLM auto tool-choice flags. |
-| `TOOL_CALL_PARSER` | `hermes` | Parser passed to `--tool-call-parser`; choose the parser that matches your model. |
+| `TOOL_CALL_PARSER` | `qwen3_xml` for Qwen-like model names, otherwise `hermes` | Parser passed to `--tool-call-parser`; choose the parser that matches your model. |
 | `CHAT_TEMPLATE` | none | Optional explicit `--chat-template` value. Leave unset unless the model requires one. |
 
 Example:
@@ -247,7 +247,7 @@ python3 -m rag_rtl.cli generate \
 Example with vLLM tool calling:
 
 ```bash
-ENABLE_TOOL_CALLING=1 TOOL_CALL_PARSER=hermes bash vllm_deploy.sh
+ENABLE_TOOL_CALLING=1 TOOL_CALL_PARSER=qwen3_xml bash vllm_deploy.sh
 
 python3 -m rag_rtl.cli generate \
   --index indexes/rtl_hash \
@@ -260,6 +260,28 @@ python3 -m rag_rtl.cli generate \
 ```
 
 Benchmark matrix `tool`, `full`, and `all` modes also require a tool-capable vLLM server. If the server was started without `ENABLE_TOOL_CALLING=1` and a matching `TOOL_CALL_PARSER`, the matrix runner performs a preflight check and skips the tool-enabled mode with one actionable error instead of recording every sample as a zero-token generation failure.
+
+### Agentic RTL CLI
+
+`rtl_agent` is a separate model-directed workflow outside the fixed `rag_rtl` pipeline. It gives the model the same local RAG and verifier tools, lets the model decide which tools to call at each step, prints a live concise trace, and then runs one final safety verification for the CLI report.
+The agent also has a small workspace harness: it can `read_file`, `write_file`, `list_dir`, and run allowed non-shell inspection commands such as `rg`, `grep`, `ls`, `cat`, `sed`, `head`, `tail`, and `wc` inside `--workspace-root`.
+
+```bash
+ENABLE_TOOL_CALLING=1 TOOL_CALL_PARSER=qwen3_xml bash vllm_deploy.sh
+
+python3 -m rtl_agent.cli run \
+  --index indexes/rtl_hash \
+  --prompt "Design module invert with input i and output o where o is not i." \
+  --top-module invert \
+  --workspace-root runs/agent_workspace \
+  --max-steps 8 \
+  --json-report runs/agent_latest_report.json \
+  --show-final-code
+```
+
+Use `--allow-command NAME` to add a specific command to the `run_command` allowlist. Commands run without a shell, and file paths are constrained to the workspace root.
+
+For Qwen3-Coder style tool calls, use `qwen3_xml` first. If your model/template specifically expects the coder parser, set `TOOL_CALL_PARSER=qwen3_coder` when starting vLLM.
 
 Example with an external testbench:
 
