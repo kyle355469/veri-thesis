@@ -330,6 +330,19 @@ PORT=8000 \
 ./submit_vllm_sbatch.sh
 ```
 
+Tool calling is disabled by default for Slurm jobs. Enable it only when the
+served model has a matching vLLM tool parser and chat template. For Qwen3-style
+tool output, prefer a Qwen parser such as `qwen3_xml` or `qwen3_coder` over the
+Hermes parser:
+
+```bash
+ENABLE_TOOL_CALLING=1 \
+TOOL_CALL_PARSER=qwen3_xml \
+MODEL=Qwen/Qwen3-4B-Thinking-2507-FP8 \
+TENSOR_PARALLEL_SIZE=4 \
+./submit_vllm_sbatch.sh
+```
+
 If your NCHC project requires a partition or account, edit `scripts/vllm_server.sbatch` and uncomment the matching `#SBATCH --partition` / `#SBATCH --account` lines, or pass them at submit time:
 
 ```bash

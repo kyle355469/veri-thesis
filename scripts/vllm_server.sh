@@ -8,7 +8,7 @@
 #SBATCH --gpus-per-node=8
 #SBATCH --mem=200G
 #SBATCH --gpus=8
-#SBATCH --time=08:30:00
+#SBATCH --time=24:00:00
 #SBATCH --output=runs/slurm/vllm-%j.out
 #SBATCH --error=runs/slurm/vllm-%j.err
 
@@ -86,4 +86,5 @@ export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
 export VLLM_API_KEY="${VLLM_API_KEY:-EMPTY}"
 
 echo "OpenAI-compatible endpoint inside NCHC: http://$(hostname -f 2>/dev/null || hostname):${PORT}/v1"
-srun ENABLE_TOOL_CALLING=1 TOOL_CALL_PARSER=hermes bash ./vllm_deploy.sh
+echo "Tool calling request: ENABLE_TOOL_CALLING=${ENABLE_TOOL_CALLING:-0}, TOOL_CALL_PARSER=${TOOL_CALL_PARSER:-<auto>}, CHAT_TEMPLATE=${CHAT_TEMPLATE:-<unset>}"
+ENABLE_TOOL_CALLING=1 TOOL_CALL_PARSER=qwen3_xml srun bash ./vllm_deploy.sh

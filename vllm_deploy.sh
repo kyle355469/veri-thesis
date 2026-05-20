@@ -1,19 +1,29 @@
 #!/usr/bin/env bash
 set -e
 
-# MODEL="Qwen/Qwen3-8B"
-# MODEL="Qwen/Qwen3-4B-Thinking-2507-FP8"
-MODEL="${MODEL:-AS-SiliconMind/SiliconMind-V1-Qwen3-4B-T-2507}"
+# MODEL="${MODEL:-Qwen/Qwen3.5-4B}"
+MODEL="${MODEL:-zhuyaoyu/CodeV-R1-RL-Qwen-7B}"
 SERVED_NAME="${SERVED_NAME:-siliconmind-server}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
 ENABLE_TOOL_CALLING="${ENABLE_TOOL_CALLING:-0}"
-TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-hermes}"
 CHAT_TEMPLATE="${CHAT_TEMPLATE:-}"
 DTYPE="${DTYPE:-auto}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.93}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-131072}"
-TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-8}"
+# MAX_MODEL_LEN="${MAX_MODEL_LEN:-131072}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
+if [ -z "${TOOL_CALL_PARSER:-}" ]; then
+  case "$MODEL" in
+    Qwen/*) TOOL_CALL_PARSER=qwen3_xml ;;
+    *) TOOL_CALL_PARSER=hermes ;;
+  esac
+fi
+if [ -z "${TENSOR_PARALLEL_SIZE:-}" ]; then
+  case "$MODEL" in
+    Qwen/Qwen3-4B-Thinking-2507-FP8) TENSOR_PARALLEL_SIZE=4 ;;
+    *) TENSOR_PARALLEL_SIZE=4 ;;
+  esac
+fi
 
 # Optional: Hugging Face cache path
 export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
