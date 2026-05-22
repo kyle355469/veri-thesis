@@ -32,6 +32,7 @@ class AgentResult:
     rtl: str
     final_text: str
     verification: VerificationReport
+    stg_result: Optional[Any] = None
     events: List[AgentEvent] = field(default_factory=list)
     steps: int = 0
     used_tools: bool = False
@@ -42,6 +43,7 @@ class AgentResult:
             "rtl": self.rtl,
             "final_text": self.final_text,
             "verification": self.verification,
+            "stg_result": self.stg_result,
             "events": [event.to_dict() for event in self.events],
             "steps": self.steps,
             "used_tools": self.used_tools,

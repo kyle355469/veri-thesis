@@ -1,12 +1,16 @@
+import contextlib
+import io
 import json
 import tempfile
 import unittest
+from dataclasses import dataclass
 from pathlib import Path
 
-from rtl_agent.agent import AgentConfig, AgenticRtlAgent
-from rtl_agent.cli import build_parser
+from rtl_agent.agent import AgentConfig, AgentResult, AgenticRtlAgent
+from rtl_agent.cli import build_parser, print_final_result, read_stg_golden, render_cli_event
+from rtl_agent.events import AgentEvent
 from rtl_agent.harness import CompositeToolExecutor, WORKSPACE_TOOL_SCHEMAS, WorkspaceToolExecutor
-from rag_rtl.types import RtlTask
+from rag_rtl.types import Diagnostic, RtlTask, VerificationReport
 from rag_rtl.verifier import RtlVerifier
 
 
@@ -41,6 +45,13 @@ class FakeToolExecutor:
 
 def passing_verifier():
     return RtlVerifier(yosys_bin="/bin/true", verilator_bin="/bin/true")
+
+
+@dataclass
+class FakeStgResult:
+    passed: bool
+    stderr: str = ""
+    stdout: str = ""
 
 
 class AgenticRtlAgentTests(unittest.TestCase):
@@ -166,6 +177,11 @@ class AgenticRtlAgentTests(unittest.TestCase):
                 "auto",
                 "--max-steps",
                 "3",
+                "--stg-golden-file",
+                "golden.v",
+                "--stg-type",
+                "seq_clocked",
+                "--stg-arg=--verilator",
                 "--show-final-code",
             ]
         )
@@ -174,7 +190,73 @@ class AgenticRtlAgentTests(unittest.TestCase):
         self.assertEqual(args.prompt, "Design mux")
         self.assertEqual(args.base_url, "http://localhost:18000/v1")
         self.assertEqual(args.max_steps, 3)
+        self.assertEqual(args.stg_golden_file, "golden.v")
+        self.assertEqual(args.stg_type, "seq_clocked")
+        self.assertEqual(args.stg_arg, ["--verilator"])
         self.assertTrue(args.show_final_code)
+
+    def test_cli_rendering_prints_passing_result_code(self):
+        result = AgentResult(
+            rtl="module dut; endmodule",
+            final_text="```verilog\nmodule dut; endmodule\n```",
+            verification=VerificationReport(
+                syntax_passed=True,
+                lint_passed=True,
+                diagnostics=[Diagnostic(tool="stub", passed=True)],
+            ),
+            steps=2,
+            used_tools=True,
+            stopped_reason="final",
+        )
+
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            print_final_result(result, show_failed_code=False)
+
+        output = buffer.getvalue()
+        self.assertIn("status         : PASS", output)
+        self.assertIn("Result Code", output)
+        self.assertIn("module dut; endmodule", output)
+
+    def test_cli_rendering_requires_stg_pass_when_present(self):
+        result = AgentResult(
+            rtl="module dut; endmodule",
+            final_text="```verilog\nmodule dut; endmodule\n```",
+            verification=VerificationReport(
+                syntax_passed=True,
+                lint_passed=True,
+                diagnostics=[Diagnostic(tool="stub", passed=True)],
+            ),
+            stg_result=FakeStgResult(passed=False, stderr="mismatch"),
+            steps=2,
+            used_tools=True,
+            stopped_reason="final",
+        )
+
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            print_final_result(result, show_failed_code=False)
+
+        output = buffer.getvalue()
+        self.assertIn("status         : FAIL", output)
+        self.assertIn("stg            : FAIL", output)
+        self.assertNotIn("Result Code", output)
+
+    def test_read_stg_golden_from_inline_or_file(self):
+        args = build_parser().parse_args(["run", "--prompt", "x", "--stg-golden", "module g; endmodule"])
+        self.assertEqual(read_stg_golden(args), "module g; endmodule")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "golden.v"
+            path.write_text("module file_g; endmodule", encoding="utf-8")
+            args = build_parser().parse_args(["run", "--prompt", "x", "--stg-golden-file", str(path)])
+            self.assertEqual(read_stg_golden(args), "module file_g; endmodule")
+
+    def test_cli_event_rendering_has_tool_call_shape(self):
+        line = render_cli_event(AgentEvent("tool_call", 3, "model chose tool run_command", tool="run_command"))
+        self.assertIn("step 3", line)
+        self.assertIn("tool call", line)
+        self.assertIn("run_command", line)
 
 
 class WorkspaceToolExecutorTests(unittest.TestCase):

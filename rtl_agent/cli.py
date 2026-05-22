@@ -8,6 +8,7 @@ from typing import Optional
 from rag_rtl.embeddings import make_embedder
 from rag_rtl.llm import VllmClient
 from rag_rtl.retrieval_context import RetrievalContext
+from rag_rtl.stg_eval import infer_first_module_name, run_stg_equivalence
 from rag_rtl.tool_calling import RTL_TOOL_SCHEMAS
 from rag_rtl.types import RtlTask
 from rag_rtl.vector_store import VectorStore
@@ -24,19 +25,23 @@ from .harness import (
 
 
 def cmd_run(args: argparse.Namespace) -> None:
+    print_run_header(args)
     task = build_task(args)
     agent = build_agent(args)
 
     def print_event(event: AgentEvent) -> None:
-        print(event.render(), flush=True)
+        line = render_cli_event(event)
+        if line:
+            print(line, flush=True)
 
     result = agent.run(task, event_sink=print_event)
-    if args.show_final_code:
-        print(result.rtl)
+    run_final_stg_if_requested(args, result)
+    print_final_result(result, show_failed_code=args.show_final_code)
     if args.json_report:
         output = Path(args.json_report)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(dumps_result(result), encoding="utf-8")
+        print(f"\nReport written: {output}")
 
 
 def build_agent(args: argparse.Namespace) -> AgenticRtlAgent:
@@ -134,6 +139,19 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--timeout-s", type=int, default=30)
     parser.add_argument("--testbench")
     parser.add_argument("--test-command")
+    parser.add_argument("--stg-golden", help="Golden/reference RTL code for final STG equivalence checking.")
+    parser.add_argument("--stg-golden-file", help="File containing golden/reference RTL code for final STG equivalence checking.")
+    parser.add_argument("--stg-bin", default="stg")
+    parser.add_argument("--stg-type", default="combinational", choices=["combinational", "seq_clocked", "seq_done"])
+    parser.add_argument("--stg-module", help="DUT module name passed to STG. Defaults to --top-module.")
+    parser.add_argument("--stg-golden-module", help="Golden module name passed to STG. Defaults to first module in golden code.")
+    parser.add_argument("--stg-timeout-s", type=int, default=120)
+    parser.add_argument(
+        "--stg-arg",
+        action="append",
+        default=[],
+        help="Additional argument passed to `stg generate`; repeat for multiple args. Use --stg-arg=--flag for flag-like values.",
+    )
     parser.add_argument("--workspace-root", default=".", help="Root directory for agent file and command tools.")
     parser.add_argument(
         "--allow-command",
@@ -145,7 +163,120 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--command-max-output-chars", type=int, default=6000)
 
     parser.add_argument("--json-report")
-    parser.add_argument("--show-final-code", action="store_true")
+    parser.add_argument(
+        "--show-final-code",
+        action="store_true",
+        help="Also print final candidate code when verification fails. Passing code is always printed.",
+    )
+
+
+def print_run_header(args: argparse.Namespace) -> None:
+    model = args.model or os.getenv("VLLM_MODEL", "siliconmind-server")
+    base_url = args.base_url or os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
+    print("")
+    print("============================================================")
+    print(" Agentic RTL Run")
+    print("============================================================")
+    print(f" model          : {model}")
+    print(f" endpoint       : {base_url}")
+    print(f" index          : {args.index}")
+    print(f" workspace      : {args.workspace_root}")
+    print(f" tool choice    : {args.tool_choice}")
+    print(f" max steps      : {args.max_steps}")
+    if args.top_module:
+        print(f" top module     : {args.top_module}")
+    if args.stg_golden or args.stg_golden_file:
+        print(f" final STG      : enabled ({args.stg_type})")
+    print("------------------------------------------------------------")
+    print(" Trace")
+    print("------------------------------------------------------------")
+
+
+def run_final_stg_if_requested(args: argparse.Namespace, result: object) -> None:
+    golden_code = read_stg_golden(args)
+    if not golden_code:
+        return
+    print("  final   -> stg          running STG equivalence", flush=True)
+    if not result.rtl:
+        result.stg_result = {
+            "passed": False,
+            "stderr": "STG skipped because final model response did not contain parsable RTL.",
+        }
+        print("  final   <- stg          skipped: no parsable RTL", flush=True)
+        return
+    stg_result = run_stg_equivalence(
+        result.rtl,
+        golden_code,
+        stg_bin=args.stg_bin,
+        design_type=args.stg_type,
+        dut_module=args.stg_module or args.top_module,
+        golden_module=args.stg_golden_module or infer_first_module_name(golden_code),
+        timeout_s=args.stg_timeout_s,
+        extra_stg_args=args.stg_arg or [],
+    )
+    result.stg_result = stg_result
+    status = "passed" if stg_result.passed else "failed"
+    detail = stg_result.stderr[-240:] or stg_result.stdout[-240:]
+    suffix = f": {detail.strip()}" if detail.strip() else ""
+    print(f"  final   <- stg          {status}{suffix}", flush=True)
+
+
+def read_stg_golden(args: argparse.Namespace) -> str:
+    if args.stg_golden:
+        return args.stg_golden
+    if args.stg_golden_file:
+        return Path(args.stg_golden_file).read_text(encoding="utf-8")
+    return ""
+
+
+def render_cli_event(event: AgentEvent) -> str:
+    if event.event == "agent_start":
+        return "  agent loop started"
+    if event.event == "tool_call":
+        return f"  step {event.step:<2} -> tool call      {event.tool}"
+    if event.event == "tool_result":
+        return f"  step {event.step:<2} <- tool result    {event.message}"
+    if event.event == "model_final":
+        return f"  step {event.step:<2} -> final answer   {event.message}"
+    if event.event == "forced_final":
+        return f"  step {event.step:<2} -> forced final   {event.message}"
+    if event.event == "final_verification":
+        return f"  final   -> verify       {event.message}"
+    return f"  {event.render()}"
+
+
+def print_final_result(result: object, show_failed_code: bool = False) -> None:
+    verification = result.verification
+    stg_result = getattr(result, "stg_result", None)
+    stg_passed = True if stg_result is None else _stg_passed(stg_result)
+    passed = verification.passed and stg_passed
+    print("------------------------------------------------------------")
+    print(" Result")
+    print("------------------------------------------------------------")
+    print(f" status         : {'PASS' if passed else 'FAIL'}")
+    print(f" steps          : {result.steps}")
+    print(f" used tools     : {'yes' if result.used_tools else 'no'}")
+    print(f" stopped reason : {result.stopped_reason}")
+    failed_tools = [item.tool for item in verification.diagnostics if not item.passed]
+    if failed_tools:
+        print(f" failed tools   : {', '.join(failed_tools)}")
+    if stg_result is not None:
+        print(f" stg            : {'PASS' if stg_passed else 'FAIL'}")
+
+    should_print_code = passed or show_failed_code
+    if should_print_code:
+        print("------------------------------------------------------------")
+        print(" Result Code")
+        print("------------------------------------------------------------")
+        code = result.rtl.strip()
+        print(code if code else "<no parsable RTL>")
+        print("------------------------------------------------------------")
+
+
+def _stg_passed(stg_result: object) -> bool:
+    if isinstance(stg_result, dict):
+        return bool(stg_result.get("passed"))
+    return bool(getattr(stg_result, "passed", False))
 
 
 def main(argv: Optional[list[str]] = None) -> None:

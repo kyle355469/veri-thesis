@@ -129,7 +129,7 @@ class TrackingVllmClient(VllmClient):
         self,
         base_url: str = "http://localhost:8000/v1",
         model: str = "siliconmind-server",
-        timeout_s: int = 1200,
+        timeout_s: int = 3000,
         api_key: str = "EMPTY",
     ) -> None:
         super().__init__(base_url=base_url, model=model, timeout_s=timeout_s, api_key=api_key)
@@ -233,6 +233,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="runs/benchmark_matrix")
     parser.add_argument("--samples", type=int, default=5)
     parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument(
+        "--mode-concurrency",
+        type=int,
+        default=1,
+        help=(
+            "Number of benchmark/mode jobs to run in parallel. Each job still uses "
+            "--concurrency for its per-sample worker pool."
+        ),
+    )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--evaluate-only", action="store_true")
@@ -490,6 +499,7 @@ def run_one_with_usage(
             "prompt_tokens": usage["prompt_tokens"],
             "completion_tokens": usage["completion_tokens"],
             "total_tokens": usage["total_tokens"],
+            "tokens_used": usage["total_tokens"],
             "llm_requests": usage["llm_requests"],
             "token_usage_source": usage_source,
         }
@@ -567,7 +577,9 @@ def run_benchmark_mode(
                     handle.write(dumps_json(record) + "\n")
             print(
                 f"[{benchmark}/{mode}] completed {record['problem']} sample {int(record['sample']):02d}: "
-                f"{record['passfail']} passed={record['passed']} tokens={record['total_tokens']}"
+                f"{record['passfail']} passed={record['passed']} "
+                f"repairs={repair_attempts_label(record.get('repair_attempts'))} "
+                f"tokens={record['tokens_used']}"
             )
 
     records.sort(key=record_sort_key)
@@ -581,6 +593,9 @@ def run_benchmark_mode(
             "avg_prompt_tokens": average(record.get("prompt_tokens") for record in records),
             "avg_completion_tokens": average(record.get("completion_tokens") for record in records),
             "avg_total_tokens": average(record.get("total_tokens") for record in records),
+            "total_tokens_used": sum(numeric_or_zero(record.get("tokens_used", record.get("total_tokens"))) for record in records),
+            "avg_repair_attempts": average(record.get("repair_attempts") for record in records),
+            "total_repair_attempts": sum(numeric_or_zero(record.get("repair_attempts")) for record in records),
             "llm_requests": sum(int(record.get("llm_requests") or 0) for record in records),
             "token_usage_sources": count_values(record.get("token_usage_source") for record in records),
         }
@@ -629,6 +644,17 @@ def estimate_tokens(value: Any) -> int:
 def average(values: Iterable[Any]) -> float:
     numeric = [float(value) for value in values if value is not None]
     return (sum(numeric) / len(numeric)) if numeric else 0.0
+
+
+def numeric_or_zero(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def repair_attempts_label(value: Any) -> str:
+    return "n/a" if value is None else str(value)
 
 
 def count_values(values: Iterable[Any]) -> Dict[str, int]:
@@ -684,6 +710,9 @@ def build_question_rows(records: Sequence[Dict[str, Any]]) -> List[Dict[str, Any
             "avg_prompt_tokens": average(item.get("prompt_tokens") for item in items),
             "avg_completion_tokens": average(item.get("completion_tokens") for item in items),
             "avg_total_tokens": average(item.get("total_tokens") for item in items),
+            "total_tokens_used": sum(numeric_or_zero(item.get("tokens_used", item.get("total_tokens"))) for item in items),
+            "avg_repair_attempts": average(item.get("repair_attempts") for item in items),
+            "total_repair_attempts": sum(numeric_or_zero(item.get("repair_attempts")) for item in items),
             "avg_wall_s": average(item.get("wall_s") for item in items),
             "generated_count": sum(1 for item in items if item.get("generated")),
             "syntax_passed_count": sum(1 for item in items if item.get("syntax_passed")),
@@ -710,8 +739,11 @@ def build_matrix_rows(summaries: Sequence[Dict[str, Any]]) -> List[Dict[str, Any
                 "pass@3": summary.get("pass@3"),
                 "pass@5": summary.get("pass@5"),
                 "avg_total_tokens": summary.get("avg_total_tokens", 0.0),
+                "total_tokens_used": summary.get("total_tokens_used", 0),
                 "avg_prompt_tokens": summary.get("avg_prompt_tokens", 0.0),
                 "avg_completion_tokens": summary.get("avg_completion_tokens", 0.0),
+                "avg_repair_attempts": summary.get("avg_repair_attempts", 0.0),
+                "total_repair_attempts": summary.get("total_repair_attempts", 0),
                 "llm_requests": summary.get("llm_requests", 0),
                 "generated": summary.get("generated"),
                 "compiled": summary.get("iverilog_compiled"),
@@ -741,6 +773,8 @@ def write_records_csv(path: Path, records: Sequence[Dict[str, Any]]) -> None:
         "prompt_tokens",
         "completion_tokens",
         "total_tokens",
+        "tokens_used",
+        "repair_attempts",
         "llm_requests",
         "token_usage_source",
         "generated",
@@ -768,8 +802,11 @@ def write_table_outputs(output_dir: Path, summaries: Sequence[Dict[str, Any]], r
         "pass@3",
         "pass@5",
         "avg_total_tokens",
+        "total_tokens_used",
         "avg_prompt_tokens",
         "avg_completion_tokens",
+        "avg_repair_attempts",
+        "total_repair_attempts",
         "llm_requests",
         "generated",
         "compiled",
@@ -788,8 +825,11 @@ def write_table_outputs(output_dir: Path, summaries: Sequence[Dict[str, Any]], r
         "pass@3",
         "pass@5",
         "avg_total_tokens",
+        "total_tokens_used",
         "avg_prompt_tokens",
         "avg_completion_tokens",
+        "avg_repair_attempts",
+        "total_repair_attempts",
         "avg_wall_s",
         "generated_count",
         "compiled_count",
@@ -843,8 +883,61 @@ def markdown_value(value: Any) -> str:
 
 
 def print_matrix(rows: Sequence[Dict[str, Any]]) -> None:
-    fields = ["benchmark", "mode", "problems", "samples", "correct_count", "accuracy", "pass@1", "pass@3", "pass@5", "avg_total_tokens"]
+    fields = [
+        "benchmark",
+        "mode",
+        "problems",
+        "samples",
+        "correct_count",
+        "accuracy",
+        "pass@1",
+        "pass@3",
+        "pass@5",
+        "avg_total_tokens",
+        "total_tokens_used",
+        "avg_repair_attempts",
+        "total_repair_attempts",
+    ]
     print(markdown_table(fields, rows))
+
+
+def run_matrix_jobs(
+    modules: Dict[str, Any],
+    benchmarks: Sequence[str],
+    modes: Sequence[str],
+    cli: argparse.Namespace,
+    output_dir: Path,
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    jobs = [(benchmark, mode) for benchmark in benchmarks for mode in modes]
+    if not jobs:
+        return [], []
+
+    max_workers = max(1, min(int(getattr(cli, "mode_concurrency", 1) or 1), len(jobs)))
+    results: Dict[Tuple[str, str], Tuple[Dict[str, Any], List[Dict[str, Any]]]] = {}
+
+    def run_job(benchmark: str, mode: str) -> Tuple[Tuple[str, str], Dict[str, Any], List[Dict[str, Any]]]:
+        print(f"=== {benchmark} / {mode}: {MODE_CONFIGS[mode].description} ===")
+        summary, records = run_benchmark_mode(modules[benchmark], benchmark, mode, cli, output_dir)
+        return (benchmark, mode), summary, records
+
+    if max_workers == 1:
+        for benchmark, mode in jobs:
+            key, summary, records = run_job(benchmark, mode)
+            results[key] = (summary, records)
+    else:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(run_job, benchmark, mode) for benchmark, mode in jobs]
+            for future in as_completed(futures):
+                key, summary, records = future.result()
+                results[key] = (summary, records)
+
+    summaries: List[Dict[str, Any]] = []
+    all_records: List[Dict[str, Any]] = []
+    for benchmark, mode in jobs:
+        summary, records = results[(benchmark, mode)]
+        summaries.append(summary)
+        all_records.extend(records)
+    return summaries, all_records
 
 
 def main() -> None:
@@ -858,15 +951,7 @@ def main() -> None:
         "verilog-eval": load_script_module("run_verilog_eval"),
         "rtllm": load_script_module("run_rtllm_eval"),
     }
-    summaries: List[Dict[str, Any]] = []
-    all_records: List[Dict[str, Any]] = []
-
-    for benchmark in benchmarks:
-        for mode in modes:
-            print(f"=== {benchmark} / {mode}: {MODE_CONFIGS[mode].description} ===")
-            summary, records = run_benchmark_mode(modules[benchmark], benchmark, mode, cli, output_dir)
-            summaries.append(summary)
-            all_records.extend(records)
+    summaries, all_records = run_matrix_jobs(modules, benchmarks, modes, cli, output_dir)
 
     write_table_outputs(output_dir, summaries, all_records)
     matrix_rows = build_matrix_rows(summaries)

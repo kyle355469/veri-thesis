@@ -894,6 +894,10 @@ def format_summary_metric(value: Optional[float]) -> str:
     return "n/a" if value is None else f"{value:.4f}"
 
 
+def repair_attempts_label(value: Any) -> str:
+    return "n/a" if value is None else str(value)
+
+
 def write_csv_summary(path: Path, records: Sequence[Dict[str, Any]]) -> None:
     fieldnames = [
         "problem",
@@ -957,7 +961,8 @@ def main() -> None:
                     handle.write(dumps_json(record) + "\n")
             print(
                 f"completed {record['problem']} {record['cid']} sample {record['sample']:02d}: "
-                f"{record['passfail']} passed={record['passed']}"
+                f"{record['passfail']} passed={record['passed']} "
+                f"repairs={repair_attempts_label(record.get('repair_attempts'))}"
             )
 
     records.sort(key=lambda item: (item["cid"], item["problem"], item["sample"]))

@@ -274,11 +274,14 @@ python3 -m rtl_agent.cli run \
   --prompt "Design module invert with input i and output o where o is not i." \
   --top-module invert \
   --workspace-root runs/agent_workspace \
+  --stg-golden-file path/to/golden.v \
+  --stg-type combinational \
   --max-steps 8 \
   --json-report runs/agent_latest_report.json \
   --show-final-code
 ```
 
+When `--stg-golden` or `--stg-golden-file` is provided, the final result is considered passing only if both the normal verifier and STG equivalence pass.
 Use `--allow-command NAME` to add a specific command to the `run_command` allowlist. Commands run without a shell, and file paths are constrained to the workspace root.
 
 For Qwen3-Coder style tool calls, use `qwen3_xml` first. If your model/template specifically expects the coder parser, set `TOOL_CALL_PARSER=qwen3_coder` when starting vLLM.

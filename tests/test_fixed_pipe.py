@@ -196,6 +196,73 @@ class FixedPipeTests(unittest.TestCase):
         ]
         self.assertEqual(retry_actions[0]["retry_kind"], "verification")
 
+    def test_fixed_pipe_keeps_verified_first_edition_when_second_edition_fails(self):
+        first_rtl = "module and2(input a, input b, output y); assign y = a & b; endmodule"
+        bad_second_rtl = "module and2(input a, input b, output y); assign y = a | b; endmodule"
+        spec_docs = [RtlDocument("spec-and", "Design a 2-input and gate", first_rtl)]
+        graph_docs = [
+            RtlDocument(
+                "graph-and",
+                "Design a 2-input and gate",
+                "datapath graph graph-and\nmodule and2\noperations $and:1\ndependencies\na -> y via $and\nb -> y via $and",
+                tags=["datapath", "$and"],
+            )
+        ]
+        embedder = HashingEmbedder(dim=128)
+        spec_store = build_vector_store(spec_docs, embedder.encode([doc.retrieval_text for doc in spec_docs]))
+        graph_store = build_vector_store(graph_docs, embedder.encode([doc.retrieval_text for doc in graph_docs]))
+        llm = SequencedLlm([first_rtl, bad_second_rtl])
+        verifier = SequencedVerifier(
+            [
+                VerificationReport(
+                    syntax_passed=True,
+                    lint_passed=True,
+                    diagnostics=[Diagnostic(tool="stub", passed=True)],
+                ),
+                VerificationReport(
+                    syntax_passed=False,
+                    lint_passed=False,
+                    diagnostics=[
+                        Diagnostic(
+                            tool="stub",
+                            passed=False,
+                            stdout="expected and gate",
+                            stderr="behavior mismatch",
+                            returncode=1,
+                        )
+                    ],
+                ),
+            ]
+        )
+
+        with tempfile.TemporaryDirectory() as tempdir:
+            tmp_path = Path(tempdir)
+            pipeline = FixedPipeRtlPipeline(
+                spec_store=spec_store,
+                code_structure_store=graph_store,
+                embedder=embedder,
+                llm_client=llm,
+                verifier=verifier,
+                cache_path=tmp_path / "cache.json",
+                monitor_path=tmp_path / "monitor.jsonl",
+                cache_mode="direct",
+                second_edition_repair_attempts=0,
+            )
+            pipeline.datapath_extractor = FakeDatapathExtractor()
+
+            response = pipeline.run(RtlTask(prompt="Design a 2-input and gate named and2.", max_repair_attempts=0))
+
+        self.assertTrue(response.verification.passed)
+        self.assertEqual(response.rtl, first_rtl)
+        self.assertEqual(verifier.rtl_seen, [first_rtl, bad_second_rtl])
+        self.assertFalse(response.metadata["second_edition"]["passed"])
+        self.assertEqual(response.metadata["selected_edition"], "first_edition")
+        fallback_actions = [
+            item for item in response.llm_actions
+            if item["action"] == "fixed_pipe_keep_first_edition"
+        ]
+        self.assertEqual(len(fallback_actions), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

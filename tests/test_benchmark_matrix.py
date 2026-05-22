@@ -4,6 +4,8 @@ import importlib.util
 import io
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -114,6 +116,104 @@ class BenchmarkMatrixTests(unittest.TestCase):
         self.assertEqual(summary["num_records"], 4)
         self.assertEqual(summary["passfail_counts"], {"preflight_error": 4})
         self.assertEqual(fake_module.run_one_calls, 0)
+
+    def test_parallel_mode_jobs_keep_final_order(self):
+        module = load_script()
+        cli = module.build_parser().parse_args(
+            [
+                "--benchmark",
+                "rtllm",
+                "--mode",
+                "model",
+                "--mode",
+                "rag",
+                "--mode",
+                "tool",
+                "--mode-concurrency",
+                "2",
+            ]
+        )
+        modules = {"rtllm": object()}
+        lock = threading.Lock()
+        active = 0
+        max_active = 0
+        delays = {"model": 0.08, "rag": 0.02, "tool": 0.01}
+
+        def fake_run_benchmark_mode(script_module, benchmark, mode, cli_args, output_dir):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                time.sleep(delays[mode])
+                return (
+                    {"benchmark": benchmark, "mode": mode},
+                    [{"benchmark": benchmark, "mode": mode, "problem": mode, "sample": 1}],
+                )
+            finally:
+                with lock:
+                    active -= 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.object(module, "run_benchmark_mode", side_effect=fake_run_benchmark_mode):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    summaries, records = module.run_matrix_jobs(
+                        modules,
+                        ["rtllm"],
+                        ["model", "rag", "tool"],
+                        cli,
+                        Path(tmp),
+                    )
+
+        self.assertGreater(max_active, 1)
+        self.assertEqual([summary["mode"] for summary in summaries], ["model", "rag", "tool"])
+        self.assertEqual([record["mode"] for record in records], ["model", "rag", "tool"])
+
+    def test_token_and_repair_columns_are_exported(self):
+        module = load_script()
+        records = [
+            {
+                "benchmark": "rtllm",
+                "mode": "rag",
+                "category": "cat",
+                "problem": "p",
+                "sample": 1,
+                "passed": True,
+                "passfail": ".",
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "tokens_used": 15,
+                "repair_attempts": 2,
+            },
+            {
+                "benchmark": "rtllm",
+                "mode": "rag",
+                "category": "cat",
+                "problem": "p",
+                "sample": 2,
+                "passed": False,
+                "passfail": "G",
+                "prompt_tokens": 8,
+                "completion_tokens": 4,
+                "total_tokens": 12,
+                "tokens_used": 12,
+                "repair_attempts": 0,
+            },
+        ]
+
+        rows = module.build_question_rows(records)
+        self.assertEqual(rows[0]["total_tokens_used"], 27)
+        self.assertEqual(rows[0]["total_repair_attempts"], 2)
+        self.assertEqual(rows[0]["avg_repair_attempts"], 1.0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = Path(tmp) / "records.csv"
+            module.write_records_csv(csv_path, records)
+            header = csv_path.read_text(encoding="utf-8").splitlines()[0].split(",")
+
+        self.assertIn("tokens_used", header)
+        self.assertIn("repair_attempts", header)
 
 
 if __name__ == "__main__":

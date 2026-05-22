@@ -123,6 +123,7 @@ class FixedPipeRtlPipeline:
         metadata = {
             **first_response.metadata,
             "pipeline": "fixed_pipe",
+            "selected_edition": "first_edition",
             "first_edition": {
                 "passed": first_response.verification.passed,
                 "rtl": first_response.rtl,
@@ -216,9 +217,25 @@ class FixedPipeRtlPipeline:
             "repair_attempts": stage_result.repair_attempts,
             "retrieved_doc_ids": structure_doc_ids,
         }
+        if stage_result.verification.passed:
+            final_rtl = stage_result.rtl
+            final_verification = stage_result.verification
+            metadata["selected_edition"] = "second_edition"
+        else:
+            final_rtl = first_response.rtl
+            final_verification = first_response.verification
+            llm_actions.append(
+                {
+                    "action": "fixed_pipe_keep_first_edition",
+                    "description": (
+                        "Second-edition RTL did not pass verification, so the pipeline kept "
+                        "the already-verified first-edition RTL as the final response."
+                    ),
+                }
+            )
         response = PipelineResponse(
-            rtl=stage_result.rtl,
-            verification=stage_result.verification,
+            rtl=final_rtl,
+            verification=final_verification,
             retrieved_doc_ids=first_response.retrieved_doc_ids + structure_doc_ids,
             cache_source=first_response.cache_source,
             repair_attempts=first_response.repair_attempts + stage_result.repair_attempts,

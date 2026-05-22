@@ -54,21 +54,5 @@
     {
         "query": "The Verilog code describes a module named invert with one input i and one output o, where o is the logical inverse of i. When i is 1, o becomes 0, and when i is 0, o becomes 1.",
         "result": "module invert (input wire i, output wire o);\nassign o = !i;\nendmodule"
-    },
-    {
-        "query": "This Verilog module, called invert, accepts a single input signal i and generates an output o equal to the negation of i. If i is high (1), o is low (0); if i is low (0), o is high (1).",
-        "result": "module invert (input wire i, output wire o);\nassign o = !i;\nendmodule"
-    },
-    {
-        "query": "The module invert in Verilog has one input i and one output o. The output o always represents the opposite logical value of i: 1 turns into 0, and 0 turns into 1.",
-        "result": "module invert (input wire i, output wire o);\nassign o = !i;\nendmodule"
-    },
-    {
-        "query": "In this Verilog design, the module invert receives an input i and outputs o, where o is simply the inverted value of i. Thus, an input of 1 results in 0, while an input of 0 results in 1.",
-        "result": "module invert (input wire i, output wire o);\nassign o = !i;\nendmodule"
-    },
-    {
-        "query": "The Verilog module named invert uses a single input i to produce an output o that is the logical NOT of i. Whenever i equals 1, o equals 0, and whenever i equals 0, o equals 1.",
-        "result": "module invert (input wire i, output wire o);\nassign o = !i;\nendmodule"
     }
 ]
