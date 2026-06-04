@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -e
-
-# MODEL="${MODEL:-Qwen/Qwen3.5-4B}"
+MODEL="${MODEL:-openai/gpt-oss-20b}"
+# MODEL="${MODEL:-Qwen/Qwen3-4B-Instruct-2507}"
 # MODEL="${MODEL:-zhuyaoyu/CodeV-R1-RL-Qwen-7B}"
-MODEL="${MODEL:-AS-SiliconMind/SiliconMind-V1-Qwen3-4B-T-2507}"
+# MODEL="${MODEL:-AS-SiliconMind/SiliconMind-V1-Qwen3-4B-T-2507}"
 SERVED_NAME="${SERVED_NAME:-siliconmind-server}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
@@ -11,8 +11,8 @@ ENABLE_TOOL_CALLING="${ENABLE_TOOL_CALLING:-0}"
 CHAT_TEMPLATE="${CHAT_TEMPLATE:-}"
 DTYPE="${DTYPE:-auto}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.93}"
-# MAX_MODEL_LEN="${MAX_MODEL_LEN:-131072}"
-MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-131072}"
+# MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 if [ -z "${TOOL_CALL_PARSER:-}" ]; then
   case "$MODEL" in
     Qwen/*|*Qwen*|*qwen*) TOOL_CALL_PARSER=qwen3_xml ;;
@@ -51,12 +51,11 @@ echo "Served model name: ${SERVED_NAME}"
 echo "Tensor parallel size: ${TENSOR_PARALLEL_SIZE}"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 vllm serve "$MODEL" \
-#  --tensor-parallel-size "$TENSOR_PARALLEL_SIZE" \
+  --max-model-len 131072 \
   --served-model-name "$SERVED_NAME" \
   --host "$HOST" \
   --port "$PORT" \
   --dtype "$DTYPE" \
   --trust-remote-code \
   --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
-  --max-model-len "$MAX_MODEL_LEN" \
   "${TOOL_ARGS[@]}"
