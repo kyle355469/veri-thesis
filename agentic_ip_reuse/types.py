@@ -77,6 +77,11 @@ class AgenticIpReuseResult:
     repair_attempts: int = 0
     llm_traces: List[LlmTrace] = field(default_factory=list)
     retrieval_traces: List[Dict[str, Any]] = field(default_factory=list)
+    large_spec_manifest: Optional[Dict[str, Any]] = None
+    decomposition_tree: Optional[Dict[str, Any]] = None
+    module_generation: List[Dict[str, Any]] = field(default_factory=list)
+    workspace_dir: Optional[str] = None
+    artifacts: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -89,4 +94,9 @@ class AgenticIpReuseResult:
             "repair_attempts": self.repair_attempts,
             "llm_traces": self.llm_traces,
             "retrieval_traces": self.retrieval_traces,
+            "large_spec_manifest": self.large_spec_manifest,
+            "decomposition_tree": self.decomposition_tree,
+            "module_generation": self.module_generation,
+            "workspace_dir": self.workspace_dir,
+            "artifacts": self.artifacts,
         }

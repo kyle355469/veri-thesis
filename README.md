@@ -50,7 +50,7 @@ export VLLM_API_KEY=EMPTY
 Then run the website from the repository root:
 
 ```bash
-python3 scripts/web_app.py --host 127.0.0.1 --port 8700
+python3 scripts/web_app.py --host 127.0.0.1 --port 8765
 ```
 
 Open:
@@ -58,6 +58,23 @@ Open:
 ```text
 http://127.0.0.1:8765
 ```
+
+To run the Agentic IP Reuse RealBench/RTL-Mosaic website with live submodule
+progress and the generation tree:
+
+```bash
+python3 scripts/agentic_ip_reuse_web.py --host 127.0.0.1 --port 8780
+```
+
+Open:
+
+```text
+http://127.0.0.1:8780/demo
+```
+
+The website now reports an error when its requested port is already occupied,
+so an older server cannot silently hide a newly launched one. Pass
+`--auto-port` to explicitly use the next available port.
 
 The website automatically discovers indexes under `indexes/` that contain both `documents.jsonl` and `vectors.npy`. It also reads all document tags from the selected index and shows them as selectable options. Selected tags filter the retrieval store before generation; use `Any` to keep documents matching at least one selected tag, or `All` to require every selected tag.
 

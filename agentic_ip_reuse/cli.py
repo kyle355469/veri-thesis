@@ -21,6 +21,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         target_hdl=args.target_hdl,
         top_module=args.top_module,
         constraints=args.constraint,
+        workspace_dir=args.workspace_dir,
     )
     print(result.rtl)
     if args.json_report:
@@ -54,6 +55,13 @@ def build_agent(args: argparse.Namespace) -> AgenticIpReuseAgent:
         max_repair_attempts=args.max_repair_attempts,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
+        large_spec_threshold_chars=args.large_spec_threshold_chars,
+        large_spec_chunk_chars=args.large_spec_chunk_chars,
+        decomposition_mode=args.decomposition_mode,
+        recursive_decomposition=args.recursive_decomposition,
+        recursive_max_depth=args.recursive_max_depth,
+        recursive_max_nodes=args.recursive_max_nodes,
+        max_generation_retries=args.max_generation_retries,
     )
     return AgenticIpReuseAgent(llm, retrieval_context, verifier, config)
 
@@ -83,9 +91,17 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--target-hdl", default="verilog")
     parser.add_argument("--top-module")
     parser.add_argument("--constraint", action="append", default=[])
+    parser.add_argument("--workspace-dir", default="runs/workspace")
     parser.add_argument("--retrieve-k", type=int, default=8)
     parser.add_argument("--context-k", type=int, default=4)
     parser.add_argument("--max-repair-attempts", type=int, default=2)
+    parser.add_argument("--max-generation-retries", type=int, default=2)
+    parser.add_argument("--large-spec-threshold-chars", type=int, default=40000)
+    parser.add_argument("--large-spec-chunk-chars", type=int, default=30000)
+    parser.add_argument("--decomposition-mode", choices=["original", "chunking"], default="original")
+    parser.add_argument("--recursive-decomposition", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--recursive-max-depth", type=int, default=4)
+    parser.add_argument("--recursive-max-nodes", type=int, default=64)
 
     parser.add_argument("--base-url", help="OpenAI-compatible vLLM base URL. Defaults to VLLM_BASE_URL.")
     parser.add_argument("--model", help="Served model name. Defaults to VLLM_MODEL.")

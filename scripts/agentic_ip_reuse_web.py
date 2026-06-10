@@ -51,20 +51,33 @@ class WebSettings:
     llm_timeout_s: int
     temperature: float
     max_tokens: int
+    large_spec_threshold_chars: int
+    large_spec_chunk_chars: int
+    decomposition_mode: str
+    recursive_decomposition: bool
+    recursive_max_depth: int
+    recursive_max_nodes: int
     agent_timeout_s: int
     verification_timeout_s: int
+    max_generation_retries: int
 
 
 TASK_CACHE_LOCK = threading.Lock()
 TASK_CACHE: Dict[str, Any] = {"key": None, "tasks": [], "error": None}
 JOB_LOCK = threading.Lock()
 JOBS: Dict[str, Dict[str, Any]] = {}
+JOB_ARTIFACTS: Dict[str, Dict[str, Path]] = {}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the local Agentic IP Reuse RealBench web UI.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8780)
+    parser.add_argument(
+        "--auto-port",
+        action="store_true",
+        help="Use the next available port when --port is already occupied.",
+    )
     parser.add_argument("--realbench-root", default="/home/kai/eval_dt/real_bench")
     parser.add_argument("--rtl-mosaic-root", default="/home/kai/eval_dt/rtl-mosaic")
     parser.add_argument("--chipbench-root", default="/home/kai/eval_dt/ChipBench/Verilog Gen")
@@ -79,19 +92,37 @@ def main() -> None:
     parser.add_argument("--retrieve-k", type=int, default=8)
     parser.add_argument("--context-k", type=int, default=4)
     parser.add_argument("--max-repair-attempts", type=int, default=2)
+    parser.add_argument("--max-generation-retries", type=int, default=2)
     parser.add_argument("--base-url")
     parser.add_argument("--model")
     parser.add_argument("--api-key")
     parser.add_argument("--llm-timeout-s", type=int, default=1200)
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--max-tokens", type=int, default=30000)
+    parser.add_argument("--large-spec-threshold-chars", type=int, default=40000)
+    parser.add_argument("--large-spec-chunk-chars", type=int, default=30000)
+    parser.add_argument("--decomposition-mode", choices=["original", "chunking"], default="original")
+    parser.add_argument("--recursive-decomposition", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--recursive-max-depth", type=int, default=4)
+    parser.add_argument("--recursive-max-nodes", type=int, default=64)
     parser.add_argument("--agent-timeout-s", type=int, default=30)
     parser.add_argument("--verification-timeout-s", type=int, default=300)
     args = parser.parse_args()
 
+    port_attempts = 100 if args.auto_port else 1
+    try:
+        selected_port = _first_open_port(args.host, args.port, attempts=port_attempts)
+    except RuntimeError as exc:
+        parser.error(
+            f"{exc}. The website may already be running at http://{args.host}:{args.port}/demo. "
+            "Stop that process, choose another --port, or pass --auto-port."
+        )
+    if selected_port != args.port:
+        print(f"Requested port {args.port} is occupied; using {selected_port} because --auto-port was set.")
+
     settings = WebSettings(
         host=args.host,
-        port=_first_open_port(args.host, args.port),
+        port=selected_port,
         realbench_root=Path(args.realbench_root),
         rtl_mosaic_root=Path(args.rtl_mosaic_root),
         chipbench_root=Path(args.chipbench_root),
@@ -107,8 +138,15 @@ def main() -> None:
         llm_timeout_s=args.llm_timeout_s,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
+        large_spec_threshold_chars=args.large_spec_threshold_chars,
+        large_spec_chunk_chars=args.large_spec_chunk_chars,
+        decomposition_mode=args.decomposition_mode,
+        recursive_decomposition=args.recursive_decomposition,
+        recursive_max_depth=args.recursive_max_depth,
+        recursive_max_nodes=args.recursive_max_nodes,
         agent_timeout_s=args.agent_timeout_s,
         verification_timeout_s=args.verification_timeout_s,
+        max_generation_retries=args.max_generation_retries,
     )
     settings.output_dir.mkdir(parents=True, exist_ok=True)
     server = ThreadingHTTPServer((settings.host, settings.port), _make_handler(settings))
@@ -161,6 +199,16 @@ def _make_handler(settings: WebSettings):
                     return
                 self._send_json(payload)
                 return
+            if parsed.path == "/api/artifact":
+                query = parse_qs(parsed.query)
+                job_id = query.get("job_id", [""])[0]
+                artifact_id = query.get("artifact_id", [""])[0]
+                artifact = _job_artifact_path(job_id, artifact_id)
+                if artifact is None:
+                    self._send_error(HTTPStatus.NOT_FOUND, "Unknown job artifact")
+                    return
+                self._send_file(artifact)
+                return
             if parsed.path == "/api/rtl-mosaic":
                 self._send_json(_rtl_mosaic_payload(settings))
                 return
@@ -211,6 +259,17 @@ def _make_handler(settings: WebSettings):
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_file(self, path: Path) -> None:
+            body = path.read_bytes()
+            content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            filename = path.name.replace('"', "").replace("\r", "").replace("\n", "")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Disposition", f'inline; filename="{filename}"')
+            self.end_headers()
+            self.wfile.write(body)
+
         def _send_error(self, status: HTTPStatus, message: str) -> None:
             self._send_json({"ok": False, "error": message}, status=status)
 
@@ -229,6 +288,13 @@ def _config_payload(settings: WebSettings) -> Dict[str, Any]:
             "retrieve_k": settings.retrieve_k,
             "context_k": settings.context_k,
             "max_repair_attempts": settings.max_repair_attempts,
+            "max_generation_retries": settings.max_generation_retries,
+            "large_spec_threshold_chars": settings.large_spec_threshold_chars,
+            "large_spec_chunk_chars": settings.large_spec_chunk_chars,
+            "decomposition_mode": settings.decomposition_mode,
+            "recursive_decomposition": settings.recursive_decomposition,
+            "recursive_max_depth": settings.recursive_max_depth,
+            "recursive_max_nodes": settings.recursive_max_nodes,
             "base_url": settings.base_url or "http://localhost:8000/v1",
             "model": settings.model or "siliconmind-server",
         },
@@ -434,6 +500,7 @@ def _start_run_payload(settings: WebSettings, payload: Dict[str, Any]) -> Dict[s
         return {"ok": False, "error": f"Unknown task_id: {task_id}"}
     sample = _int_value(payload.get("sample"), 1)
     max_repair_attempts = max(0, _int_value(payload.get("max_repair_attempts"), settings.max_repair_attempts))
+    decomposition_mode = _decomposition_mode_value(payload.get("decomposition_mode"), settings.decomposition_mode)
     job_id = uuid.uuid4().hex[:12]
     job = {
         "ok": True,
@@ -443,17 +510,20 @@ def _start_run_payload(settings: WebSettings, payload: Dict[str, Any]) -> Dict[s
         "task": task.task,
         "sample": sample,
         "max_repair_attempts": max_repair_attempts,
+        "decomposition_mode": decomposition_mode,
         "started_at": time.time(),
         "updated_at": time.time(),
         "stages": [],
+        "artifacts": [],
         "result": None,
         "error": None,
     }
     with JOB_LOCK:
         JOBS[job_id] = job
+        JOB_ARTIFACTS[job_id] = {}
     thread = threading.Thread(
         target=_run_job_thread,
-        args=(settings, task, sample, bool(payload.get("resume")), max_repair_attempts, job_id),
+        args=(settings, task, sample, bool(payload.get("resume")), max_repair_attempts, decomposition_mode, job_id),
         daemon=True,
     )
     thread.start()
@@ -479,11 +549,13 @@ def _start_rtl_mosaic_payload(settings: WebSettings, payload: Dict[str, Any]) ->
         "started_at": time.time(),
         "updated_at": time.time(),
         "stages": [],
+        "artifacts": [],
         "result": None,
         "error": None,
     }
     with JOB_LOCK:
         JOBS[job_id] = job
+        JOB_ARTIFACTS[job_id] = {}
     thread = threading.Thread(
         target=_run_rtl_mosaic_job_thread,
         args=(settings, dataset, problems, limit, dry_run, engine, job_id),
@@ -555,6 +627,7 @@ def _run_rtl_mosaic_job_thread(
         records = _read_jsonl_file(output_dir / "records.jsonl", limit=20)
         agent_steps = _rtl_mosaic_agent_steps(records, summary)
         generated_code = _first_generated_code(records)
+        _register_job_artifacts(job_id, _rtl_mosaic_artifact_paths(records))
         result = {
             "ok": completed.returncode == 0,
             "command": command,
@@ -612,6 +685,7 @@ def _run_job_thread(
     sample: int,
     resume: bool,
     max_repair_attempts: int,
+    decomposition_mode: str,
     job_id: str,
 ) -> None:
     _update_job(job_id, state="running")
@@ -626,6 +700,7 @@ def _run_job_thread(
         args.resume = resume
         args.evaluate_only = False
         args.max_repair_attempts = max_repair_attempts
+        args.decomposition_mode = decomposition_mode
         _append_stage(job_id, {"stage": "ip_database", "status": "running", "task": task.task})
         bundle = realbench.build_task_index(task, args, settings.output_dir)
         _append_stage(
@@ -645,6 +720,14 @@ def _run_job_thread(
             {task.task_id: bundle},
             stage_callback=stage_callback,
         )
+        artifact_paths = dict(record.get("agent_artifacts") or {})
+        for label, path in {
+            "generated RTL": record.get("generated_code_path"),
+            "agent report": record.get("agent_report_path"),
+        }.items():
+            if path:
+                artifact_paths[label] = str(path)
+        _register_job_artifacts(job_id, artifact_paths)
         result = {
             "ok": True,
             "elapsed_s": time.perf_counter() - started,
@@ -670,7 +753,279 @@ def _job_payload(job_id: str) -> Optional[Dict[str, Any]]:
         job = JOBS.get(job_id)
         if job is None:
             return None
-        return json.loads(dumps_json(job))
+        payload = json.loads(dumps_json(job))
+    progress = _job_progress(payload)
+    payload["progress"] = progress
+    payload["generation_tree"] = _generation_tree(payload, progress)
+    live_code, live_path = _live_generated_code(payload)
+    if live_code:
+        payload["live_generated_code"] = live_code
+        payload["live_generated_code_path"] = str(live_path) if live_path else None
+    return payload
+
+
+def _live_generated_code(job: Dict[str, Any]) -> tuple[Optional[str], Optional[Path]]:
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    for path_value in (
+        result.get("record", {}).get("generated_code_path") if isinstance(result.get("record"), dict) else None,
+        result.get("generated_code_path"),
+    ):
+        text = _read_text_file(path_value)
+        if text:
+            return text, Path(str(path_value))
+
+    workspace_dirs: List[Path] = []
+    record = result.get("record") if isinstance(result.get("record"), dict) else {}
+    if record.get("agent_workspace_path"):
+        workspace_dirs.append(Path(str(record["agent_workspace_path"])))
+    for stage in job.get("stages") or []:
+        detail = stage.get("detail") or {}
+        workspace_dir = detail.get("workspace_dir")
+        if workspace_dir:
+            workspace_dirs.append(Path(str(workspace_dir)))
+
+    seen: set[Path] = set()
+    for workspace in workspace_dirs:
+        if workspace in seen:
+            continue
+        seen.add(workspace)
+        for pattern in ("combined/*.sv", "combined/*.v", "rtl/*.sv", "rtl/*.v"):
+            for path in sorted(workspace.glob(pattern)):
+                text = _read_text_file(path)
+                if text:
+                    return text, path
+    return None, None
+
+
+def _job_progress(job: Dict[str, Any]) -> Dict[str, Any]:
+    modules: Dict[str, Dict[str, Any]] = {}
+    total_hint = 0
+    current_stage = "queued"
+    current_status = str(job.get("state") or "queued")
+
+    def ensure_module(name: Any) -> Optional[Dict[str, Any]]:
+        text = str(name or "").strip()
+        if not text:
+            return None
+        if text not in modules:
+            modules[text] = {"name": text, "status": "planned", "stage": "decomposition"}
+        return modules[text]
+
+    for event in job.get("stages") or []:
+        stage = str(event.get("stage") or "unknown")
+        status = str(event.get("status") or "running")
+        detail = event.get("detail") or {}
+        current_stage = stage
+        current_status = status
+        total_hint = max(
+            total_hint,
+            _int_value(detail.get("module_count"), 0),
+            _int_value(detail.get("node_count"), 0),
+        )
+        for name in detail.get("modules") or []:
+            ensure_module(name)
+
+        module = ensure_module(detail.get("module"))
+        if module is None:
+            if stage == "rtl_generation" and status == "complete":
+                for item in modules.values():
+                    item.update({"status": "complete", "stage": stage})
+            continue
+
+        next_status = None
+        if status == "error":
+            next_status = "error"
+        elif stage == "recursive_decomposition":
+            next_status = "decomposing"
+        elif stage in {"ip_search", "ip_evaluation"}:
+            next_status = "retrieving"
+        elif stage == "module_generation":
+            next_status = "generating"
+        elif stage == "module_verification":
+            next_status = "complete" if status == "complete" else "verifying"
+        elif stage == "module_repair":
+            next_status = "repairing"
+        elif stage == "recursive_wrapper_generation":
+            next_status = "complete" if status == "complete" else "integrating"
+        if next_status:
+            module.update({"status": next_status, "stage": stage})
+        if detail.get("depth") is not None:
+            module["depth"] = detail["depth"]
+        if detail.get("attempt") is not None:
+            module["attempt"] = detail["attempt"]
+        if detail.get("attempts") is not None:
+            module["attempts"] = detail["attempts"]
+
+    result = job.get("result") or {}
+    record = result.get("record") or {}
+    report = result.get("report") or {}
+    module_generation = record.get("module_generation") or report.get("module_generation") or []
+    for index, item in enumerate(module_generation, start=1):
+        module = ensure_module(item.get("module"))
+        if module is None:
+            continue
+        module.update(
+            {
+                "status": "complete" if item.get("passed", True) else "error",
+                "stage": "module_generation",
+                "order": index,
+                "kind": item.get("kind"),
+                "repair_attempts": item.get("repair_attempts", 0),
+            }
+        )
+        if item.get("depth") is not None:
+            module["depth"] = item["depth"]
+
+    if job.get("state") == "error":
+        for module in reversed(list(modules.values())):
+            if module["status"] not in {"complete", "error"}:
+                module["status"] = "error"
+                break
+
+    module_list = list(modules.values())
+    completed = sum(item["status"] == "complete" for item in module_list)
+    failed = sum(item["status"] == "error" for item in module_list)
+    active = sum(item["status"] not in {"planned", "complete", "error"} for item in module_list)
+    total = max(total_hint, len(module_list))
+    if total:
+        percent = round(100 * completed / total)
+    else:
+        percent = 100 if job.get("state") == "complete" else 0
+    return {
+        "total": total,
+        "discovered": len(module_list),
+        "completed": completed,
+        "active": active,
+        "failed": failed,
+        "percent": percent,
+        "current_stage": current_stage,
+        "current_status": current_status,
+        "modules": module_list,
+    }
+
+
+def _generation_tree(job: Dict[str, Any], progress: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    result = job.get("result") or {}
+    record = result.get("record") or {}
+    report = result.get("report") or {}
+    raw_tree = (
+        record.get("decomposition_tree")
+        or report.get("decomposition_tree")
+        or _read_json_file((record.get("agent_artifacts") or {}).get("decomposition_tree"))
+    )
+    generation = record.get("module_generation") or report.get("module_generation") or []
+    generation_by_name = {
+        str(item.get("module")): {**item, "order": index}
+        for index, item in enumerate(generation, start=1)
+        if item.get("module")
+    }
+    progress_by_name = {
+        str(item.get("name")): item
+        for item in progress.get("modules") or []
+        if item.get("name")
+    }
+
+    if not raw_tree:
+        top_name = record.get("top_module")
+        if not top_name:
+            for event in job.get("stages") or []:
+                top_name = (event.get("detail") or {}).get("top_module") or top_name
+        report_modules = report.get("modules") or []
+        child_names = list(progress_by_name)
+        for item in report_modules:
+            name = str(item.get("name") or "").strip()
+            if name and name not in child_names:
+                child_names.append(name)
+        if not top_name and not child_names:
+            return None
+        raw_tree = {
+            "module": top_name or str(job.get("task") or "top"),
+            "kind": "root",
+            "depth": 0,
+            "children": [
+                {"module": name, "kind": generation_by_name.get(name, {}).get("kind") or "module", "children": []}
+                for name in child_names
+            ],
+        }
+
+    def enrich(node: Dict[str, Any], depth: int = 0) -> Dict[str, Any]:
+        name = str(node.get("module") or node.get("name") or "module")
+        generation_item = generation_by_name.get(name) or {}
+        progress_item = progress_by_name.get(name) or {}
+        children = [enrich(child, depth + 1) for child in node.get("children") or []]
+        status = progress_item.get("status")
+        if node.get("kind") == "root":
+            status = "error" if job.get("state") == "error" else ("complete" if job.get("state") == "complete" else "active")
+        return {
+            "module": name,
+            "kind": node.get("kind") or generation_item.get("kind") or ("composite" if children else "module"),
+            "depth": node.get("depth", depth),
+            "status": status or ("complete" if generation_item.get("passed") else "planned"),
+            "order": generation_item.get("order"),
+            "repair_attempts": generation_item.get("repair_attempts", 0),
+            "passed": generation_item.get("passed"),
+            "reason": node.get("reason"),
+            "dependencies": generation_item.get("dependencies") or [],
+            "children": children,
+        }
+
+    return enrich(raw_tree)
+
+
+def _register_job_artifacts(job_id: str, paths: Dict[str, str]) -> None:
+    registered: List[Dict[str, Any]] = []
+    private: Dict[str, Path] = {}
+    seen: set[Path] = set()
+    for label, path_value in sorted(paths.items()):
+        if not path_value:
+            continue
+        path = Path(str(path_value)).resolve()
+        if not path.is_file() or path in seen:
+            continue
+        seen.add(path)
+        artifact_id = uuid.uuid4().hex[:16]
+        private[artifact_id] = path
+        registered.append(
+            {
+                "artifact_id": artifact_id,
+                "label": str(label),
+                "name": path.name,
+                "size": path.stat().st_size,
+                "url": f"/api/artifact?job_id={job_id}&artifact_id={artifact_id}",
+            }
+        )
+    with JOB_LOCK:
+        if job_id not in JOBS:
+            return
+        JOB_ARTIFACTS[job_id] = private
+        JOBS[job_id]["artifacts"] = registered
+        JOBS[job_id]["updated_at"] = time.time()
+
+
+def _job_artifact_path(job_id: str, artifact_id: str) -> Optional[Path]:
+    with JOB_LOCK:
+        path = (JOB_ARTIFACTS.get(job_id) or {}).get(artifact_id)
+    if path is None or not path.is_file():
+        return None
+    return path
+
+
+def _rtl_mosaic_artifact_paths(records: List[Dict[str, Any]]) -> Dict[str, str]:
+    artifacts: Dict[str, str] = {}
+    for record in records:
+        tag = str(record.get("tag") or record.get("problem") or "rtl-mosaic")
+        for label, key in (
+            ("generated RTL", "generated_code_path"),
+            ("agent report", "agent_report_path"),
+            ("agent stages", "agent_stage_path"),
+        ):
+            path = record.get(key)
+            if path:
+                artifacts[f"{tag}: {label}"] = str(path)
+        report = _read_json_file(record.get("agent_report_path")) or {}
+        for label, path in (report.get("artifacts") or {}).items():
+            artifacts[f"{tag}: {label}"] = str(path)
+    return artifacts
 
 
 def _append_stage(job_id: str, event: Dict[str, Any]) -> None:
@@ -707,6 +1062,7 @@ def _run_task_payload(settings: WebSettings, payload: Dict[str, Any]) -> Dict[st
     args.resume = bool(payload.get("resume"))
     args.evaluate_only = False
     args.max_repair_attempts = max(0, _int_value(payload.get("max_repair_attempts"), settings.max_repair_attempts))
+    args.decomposition_mode = _decomposition_mode_value(payload.get("decomposition_mode"), settings.decomposition_mode)
     sample = _int_value(payload.get("sample"), 1)
     started = time.perf_counter()
     bundle = realbench.build_task_index(task, args, settings.output_dir)
@@ -742,11 +1098,19 @@ def _bundle_payload(bundle: Any) -> Dict[str, Any]:
     }
 
 
+def _decomposition_mode_value(value: Any, default: str = "original") -> str:
+    text = str(value or default or "original").strip().lower()
+    return text if text in {"original", "chunking"} else "original"
+
+
 def _realbench_args(settings: WebSettings, *, task_level: str) -> argparse.Namespace:
     return argparse.Namespace(
         benchmark="realbench",
         realbench_root=str(settings.realbench_root),
         rtl_mosaic_root="/home/kai/eval_dt/rtl-mosaic",
+        chipbench_root="/home/kai/eval_dt/ChipBench/Verilog Gen",
+        rtl_mosaic_engine="agentic",
+        realbench_verifier="native",
         output_dir=str(settings.output_dir),
         solution_name="agentic_ip_reuse_web",
         task_level=task_level,
@@ -769,6 +1133,13 @@ def _realbench_args(settings: WebSettings, *, task_level: str) -> argparse.Names
         temperature=settings.temperature,
         max_tokens=settings.max_tokens,
         max_repair_attempts=settings.max_repair_attempts,
+        max_generation_retries=settings.max_generation_retries,
+        large_spec_threshold_chars=settings.large_spec_threshold_chars,
+        large_spec_chunk_chars=settings.large_spec_chunk_chars,
+        decomposition_mode=settings.decomposition_mode,
+        recursive_decomposition=settings.recursive_decomposition,
+        recursive_max_depth=settings.recursive_max_depth,
+        recursive_max_nodes=settings.recursive_max_nodes,
         yosys_bin="yosys",
         verilator_bin="verilator",
         agent_timeout_s=settings.agent_timeout_s,
@@ -922,10 +1293,24 @@ def _step(name: str, status: str, detail: Dict[str, Any]) -> Dict[str, Any]:
 def _stage_label(stage: str) -> str:
     labels = {
         "agent_start": "Agent Start",
+        "large_spec_precheck": "Large Spec Precheck",
+        "large_spec_workspace": "Large Spec Workspace",
+        "large_spec_split": "Large Spec Split",
+        "large_spec_chunk_fallback": "Chunk And Merge Fallback",
+        "large_spec_chunking": "Text Chunking Split",
+        "recursive_decomposition": "Recursive Decomposition",
+        "recursive_rtl_generation": "Recursive RTL Generation",
+        "recursive_wrapper_generation": "Recursive Wrapper Generation",
         "requirements": "Requirements",
         "decomposition": "Decomposition",
         "ip_search": "IP Search",
         "ip_evaluation": "IP Evaluation",
+        "module_generation": "Module Generation",
+        "module_verification": "Module Verification",
+        "module_repair": "Module Repair",
+        "top_integration": "Top Integration",
+        "top_repair": "Top Repair",
+        "combined_verification": "Combined Verification",
         "rtl_generation": "RTL Generation",
         "verification": "Syntax/Lint Verification",
         "repair": "Repair",
@@ -953,8 +1338,8 @@ def _bool_query(query: Dict[str, List[str]], key: str) -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
-def _first_open_port(host: str, preferred: int) -> int:
-    for port in range(preferred, preferred + 100):
+def _first_open_port(host: str, preferred: int, *, attempts: int = 100) -> int:
+    for port in range(preferred, preferred + attempts):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
@@ -962,7 +1347,9 @@ def _first_open_port(host: str, preferred: int) -> int:
             except OSError:
                 continue
             return port
-    raise RuntimeError(f"No open port found from {preferred} to {preferred + 99}")
+    if attempts == 1:
+        raise RuntimeError(f"Port {preferred} is already in use on {host}")
+    raise RuntimeError(f"No open port found from {preferred} to {preferred + attempts - 1}")
 
 
 INDEX_HTML = r"""<!doctype html>
@@ -1051,6 +1438,11 @@ INDEX_HTML = r"""<!doctype html>
         <h2 id="selectedTitle">Select a question</h2>
       </div>
       <div class="toolbar-actions">
+        <div class="decomposition-switch" role="group" aria-label="Decomposition mode">
+          <span>Decomposition</span>
+          <button id="originalDecompositionBtn" type="button" class="active">Original</button>
+          <button id="chunkingDecompositionBtn" type="button">Chunking</button>
+        </div>
         <label class="inline-number">
           Retries
           <input id="maxRepairAttempts" type="number" min="0" max="20" value="2">
@@ -1115,6 +1507,22 @@ INDEX_HTML = r"""<!doctype html>
         </div>
         <pre id="codeText"></pre>
       </div>
+    </section>
+
+    <section id="generationTreePanel" class="panel tree-panel" hidden>
+      <div class="panel-head">
+        <h3>Generation Tree</h3>
+        <span id="generationTreeSummary">Shown after module discovery</span>
+      </div>
+      <div id="generationTreeCanvas" class="tree-canvas"></div>
+    </section>
+
+    <section class="panel artifact-panel">
+      <div class="panel-head">
+        <h3>Run Artifacts</h3>
+        <span>Large-spec index, specs, RTL, and diagnostics</span>
+      </div>
+      <div id="artifactList" class="artifact-list"></div>
     </section>
   </main>
 
@@ -1195,7 +1603,41 @@ INDEX_HTML = r"""<!doctype html>
       </div>
       <pre id="mosaicCodeText"></pre>
     </section>
+
+    <section class="panel artifact-panel">
+      <div class="panel-head">
+        <h3>Run Artifacts</h3>
+        <span>Agent reports and divide-and-conquer outputs</span>
+      </div>
+      <div id="mosaicArtifactList" class="artifact-list"></div>
+    </section>
   </main>
+
+  <aside id="progressSidebar" class="progress-sidebar">
+    <div class="progress-head">
+      <div>
+        <div class="eyebrow">Live Monitor</div>
+        <h3>Generation Progress</h3>
+      </div>
+      <strong id="progressPercent">0%</strong>
+    </div>
+    <div class="progress-track" aria-label="Submodule completion">
+      <div id="progressBar" class="progress-bar"></div>
+    </div>
+    <div class="progress-counts">
+      <div><strong id="progressCompleted">0</strong><span>done</span></div>
+      <div><strong id="progressTotal">0</strong><span>total</span></div>
+      <div><strong id="progressActive">0</strong><span>active</span></div>
+      <div><strong id="progressFailed">0</strong><span>failed</span></div>
+    </div>
+    <div class="progress-phase">
+      <span>Current phase</span>
+      <strong id="progressPhase">Idle</strong>
+    </div>
+    <div id="moduleProgressList" class="module-progress-list">
+      <div class="module-progress planned"><strong>No active run</strong><small>Submodules will appear here as they are discovered.</small></div>
+    </div>
+  </aside>
 
   <script src="/app.js"></script>
 </body>
@@ -1222,7 +1664,7 @@ body {
   margin: 0;
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 360px 1fr;
+  grid-template-columns: 340px minmax(0, 1fr) 300px;
   background: var(--bg);
   color: var(--ink);
   font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -1235,6 +1677,8 @@ body {
   display: grid;
   grid-template-rows: auto auto 1fr;
 }
+
+body.mosaic-mode { grid-template-columns: 340px minmax(0, 1fr); }
 
 .brand {
   display: grid;
@@ -1383,7 +1827,31 @@ button:disabled { opacity: .45; cursor: not-allowed; }
   align-items: end;
 }
 
-.toolbar-actions button:last-child {
+.decomposition-switch {
+  display: grid;
+  grid-template-columns: auto auto auto;
+  gap: 6px;
+  align-items: end;
+}
+
+.decomposition-switch span {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.decomposition-switch button {
+  min-width: 82px;
+}
+
+.decomposition-switch button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#runBtn {
   background: var(--accent);
   color: white;
   border-color: var(--accent);
@@ -1479,6 +1947,178 @@ pre {
   overflow: auto;
 }
 
+.artifact-panel {
+  min-height: 120px;
+}
+
+.progress-sidebar {
+  position: sticky;
+  top: 0;
+  min-width: 0;
+  height: 100vh;
+  border-left: 1px solid var(--line);
+  background: #fbfcfe;
+  display: grid;
+  grid-template-rows: auto auto auto auto 1fr;
+  align-content: start;
+  overflow: hidden;
+}
+
+.progress-head {
+  padding: 20px 16px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.progress-head strong {
+  color: var(--accent);
+  font-size: 22px;
+}
+
+.progress-track {
+  height: 9px;
+  margin: 16px 16px 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e8ebf1;
+}
+
+.progress-bar {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width .25s ease;
+}
+
+.progress-counts {
+  padding: 8px 16px 14px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.progress-counts div {
+  display: grid;
+  gap: 1px;
+  text-align: center;
+}
+
+.progress-counts strong { font-size: 17px; }
+.progress-counts span, .progress-phase span { color: var(--muted); font-size: 11px; }
+
+.progress-phase {
+  padding: 12px 16px;
+  display: grid;
+  gap: 3px;
+  border-bottom: 1px solid var(--line);
+}
+
+.progress-phase strong {
+  overflow-wrap: anywhere;
+  text-transform: capitalize;
+}
+
+.module-progress-list {
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+  display: grid;
+  gap: 7px;
+  align-content: start;
+}
+
+.module-progress {
+  position: relative;
+  padding: 9px 9px 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  display: grid;
+  gap: 2px;
+}
+
+.module-progress::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 6px;
+  width: 3px;
+  border-radius: 99px;
+  background: #aab2c0;
+}
+
+.module-progress strong, .module-progress small { padding-left: 5px; overflow-wrap: anywhere; }
+.module-progress small { color: var(--muted); }
+.module-progress.complete::before { background: var(--accent); }
+.module-progress.error::before { background: var(--accent-2); }
+.module-progress.active::before { background: #4169d8; }
+
+.tree-panel {
+  min-height: 260px;
+}
+
+.tree-canvas {
+  min-height: 220px;
+  padding: 14px;
+  overflow: auto;
+  background:
+    linear-gradient(#eef1f6 1px, transparent 1px),
+    linear-gradient(90deg, #eef1f6 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+.tree-canvas svg {
+  display: block;
+  min-width: 100%;
+  min-height: 220px;
+}
+
+.tree-edge {
+  fill: none;
+  stroke: #aeb7c5;
+  stroke-width: 2;
+}
+
+.tree-node rect {
+  fill: #fff;
+  stroke: #aeb7c5;
+  stroke-width: 2;
+}
+
+.tree-node.complete rect { fill: #f1fbf9; stroke: #55a99e; }
+.tree-node.error rect { fill: #fff5f3; stroke: #d66b5e; }
+.tree-node.active rect { fill: #f2f6ff; stroke: #7292e8; }
+.tree-node text { fill: var(--ink); font-family: ui-sans-serif, system-ui, sans-serif; }
+.tree-node .tree-name { font-size: 13px; font-weight: 750; }
+.tree-node .tree-meta { fill: var(--muted); font-size: 10px; }
+
+.artifact-list {
+  padding: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px;
+}
+
+.artifact-link {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 9px 10px;
+  color: var(--ink);
+  display: grid;
+  gap: 4px;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.artifact-link:hover { border-color: #7d9df1; background: #f2f6ff; }
+.artifact-link small { color: var(--muted); }
+
 .mosaic-step-list {
   padding: 12px;
   display: grid;
@@ -1521,8 +2161,9 @@ pre {
 [hidden] { display: none !important; }
 
 @media (max-width: 980px) {
-  body { grid-template-columns: 1fr; }
+  body, body.mosaic-mode { grid-template-columns: 1fr; }
   .sidebar { min-height: auto; max-height: 55vh; }
+  .progress-sidebar { position: static; height: auto; max-height: 65vh; border-left: 0; border-top: 1px solid var(--line); }
   .workspace, .output-row, .summary-grid, .mosaic-workspace, .mosaic-step-list { grid-template-columns: 1fr; }
   .toolbar { display: grid; }
 }
@@ -1534,6 +2175,7 @@ APP_JS = r"""const state = {
   selected: null,
   selectedId: new URLSearchParams(location.search).get("task") || "",
   mode: new URLSearchParams(location.search).get("bench") === "rtl-mosaic" ? "mosaic" : "realbench",
+  decompositionMode: new URLSearchParams(location.search).get("decomposition") || "original",
   mosaic: null,
   mosaicSelectedProblem: "",
 };
@@ -1568,7 +2210,22 @@ const els = {
   stageList: document.getElementById("stageList"),
   statusText: document.getElementById("statusText"),
   codeText: document.getElementById("codeText"),
+  artifactList: document.getElementById("artifactList"),
+  generationTreePanel: document.getElementById("generationTreePanel"),
+  generationTreeSummary: document.getElementById("generationTreeSummary"),
+  generationTreeCanvas: document.getElementById("generationTreeCanvas"),
+  progressSidebar: document.getElementById("progressSidebar"),
+  progressPercent: document.getElementById("progressPercent"),
+  progressBar: document.getElementById("progressBar"),
+  progressCompleted: document.getElementById("progressCompleted"),
+  progressTotal: document.getElementById("progressTotal"),
+  progressActive: document.getElementById("progressActive"),
+  progressFailed: document.getElementById("progressFailed"),
+  progressPhase: document.getElementById("progressPhase"),
+  moduleProgressList: document.getElementById("moduleProgressList"),
   maxRepairAttempts: document.getElementById("maxRepairAttempts"),
+  originalDecompositionBtn: document.getElementById("originalDecompositionBtn"),
+  chunkingDecompositionBtn: document.getElementById("chunkingDecompositionBtn"),
   indexBtn: document.getElementById("indexBtn"),
   runBtn: document.getElementById("runBtn"),
   copyDemoBtn: document.getElementById("copyDemoBtn"),
@@ -1587,12 +2244,18 @@ const els = {
   mosaicStepList: document.getElementById("mosaicStepList"),
   mosaicCodeMeta: document.getElementById("mosaicCodeMeta"),
   mosaicCodeText: document.getElementById("mosaicCodeText"),
+  mosaicArtifactList: document.getElementById("mosaicArtifactList"),
 };
 
 async function init() {
   const config = await getJSON("/api/config");
   els.serverLine.textContent = `${config.defaults.model} at ${config.defaults.base_url}`;
   els.maxRepairAttempts.value = String(config.defaults.max_repair_attempts ?? 2);
+  setDecompositionMode(state.decompositionMode || config.defaults.decomposition_mode || "original", false);
+  renderArtifacts(els.artifactList, []);
+  renderArtifacts(els.mosaicArtifactList, []);
+  renderProgress(null);
+  renderGenerationTree(null);
   await loadMosaicStatus();
   await loadTasks();
   bindEvents();
@@ -1613,7 +2276,23 @@ function bindEvents() {
   els.indexBtn.addEventListener("click", buildIndex);
   els.runBtn.addEventListener("click", runSelected);
   els.copyDemoBtn.addEventListener("click", copyDemoLink);
+  els.originalDecompositionBtn.addEventListener("click", () => setDecompositionMode("original", true));
+  els.chunkingDecompositionBtn.addEventListener("click", () => setDecompositionMode("chunking", true));
   els.mosaicRunBtn.addEventListener("click", runMosaicSelected);
+}
+
+function setDecompositionMode(mode, updateUrl) {
+  state.decompositionMode = mode === "chunking" ? "chunking" : "original";
+  const chunking = state.decompositionMode === "chunking";
+  els.originalDecompositionBtn.classList.toggle("active", !chunking);
+  els.chunkingDecompositionBtn.classList.toggle("active", chunking);
+  els.originalDecompositionBtn.setAttribute("aria-pressed", String(!chunking));
+  els.chunkingDecompositionBtn.setAttribute("aria-pressed", String(chunking));
+  if (updateUrl) {
+    const params = new URLSearchParams(location.search);
+    params.set("decomposition", state.decompositionMode);
+    history.pushState({}, "", `/demo?${params.toString()}`);
+  }
 }
 
 function switchMode(mode, updateUrl) {
@@ -1627,6 +2306,8 @@ function switchMode(mode, updateUrl) {
   els.mosaicBrowser.hidden = !mosaic;
   els.realbenchView.hidden = mosaic;
   els.mosaicView.hidden = !mosaic;
+  els.progressSidebar.hidden = mosaic;
+  document.body.classList.toggle("mosaic-mode", mosaic);
   if (updateUrl) {
     const params = new URLSearchParams(location.search);
     params.set("bench", mosaic ? "rtl-mosaic" : "realbench");
@@ -1722,6 +2403,7 @@ async function runMosaicSelected() {
   els.mosaicRunStatus.textContent = "Starting RTL-Mosaic ChipBench run.";
   els.mosaicCodeMeta.textContent = "Waiting for generated RTL";
   els.mosaicCodeText.textContent = "";
+  renderArtifacts(els.mosaicArtifactList, []);
   renderMosaicSteps([{name: "Launch Evaluation", status: "running", detail: {
     engine: els.mosaicEngine.value,
     dataset: els.mosaicDataset.value,
@@ -1748,6 +2430,7 @@ async function runMosaicSelected() {
 async function pollMosaicJob(jobId) {
   for (;;) {
     const payload = await getJSON(`/api/job?job_id=${encodeURIComponent(jobId)}`);
+    renderArtifacts(els.mosaicArtifactList, payload.artifacts || []);
     if (payload.state === "complete" || payload.state === "error") {
       const result = payload.result || {};
       const summary = result.summary || {};
@@ -1765,6 +2448,7 @@ async function pollMosaicJob(jobId) {
       }, null, 2);
       renderMosaicSteps(result.agent_steps || []);
       renderMosaicCode(result);
+      renderArtifacts(els.mosaicArtifactList, payload.artifacts || []);
       if (payload.state === "error") throw new Error(payload.error || "RTL-Mosaic eval failed");
       return;
     }
@@ -1885,7 +2569,13 @@ async function selectTask(taskId, updateUrl) {
     return;
   }
   state.selected = payload.task;
-  if (updateUrl) history.pushState({}, "", `/demo?task=${encodeURIComponent(taskId)}`);
+  if (updateUrl) {
+    const params = new URLSearchParams(location.search);
+    params.set("task", taskId);
+    params.set("bench", "realbench");
+    params.set("decomposition", state.decompositionMode);
+    history.pushState({}, "", `/demo?${params.toString()}`);
+  }
   els.selectedMeta.textContent = `${payload.task.level} · ${payload.task.system}`;
   els.selectedTitle.textContent = payload.task.task;
   els.depCount.textContent = String(payload.task.dependencies.length);
@@ -1894,6 +2584,9 @@ async function selectTask(taskId, updateUrl) {
   els.demoUrl.textContent = payload.task.demo_url;
   els.promptText.textContent = payload.task.prompt;
   els.codeText.textContent = "";
+  renderArtifacts(els.artifactList, []);
+  renderProgress(null);
+  renderGenerationTree(null);
   els.statusText.textContent = "Ready.";
   renderStages([]);
   els.indexBtn.disabled = false;
@@ -1948,17 +2641,27 @@ async function runSelected() {
   els.runBtn.disabled = true;
   els.indexBtn.disabled = true;
   els.maxRepairAttempts.disabled = true;
+  els.originalDecompositionBtn.disabled = true;
+  els.chunkingDecompositionBtn.disabled = true;
   els.resultMetric.textContent = "running";
   els.statusText.textContent = "Starting background run.";
   renderStages([{stage: "web_job", status: "queued", detail: {
     task: state.selected.task,
     max_repair_attempts: maxRepairAttempts,
+    decomposition_mode: state.decompositionMode,
   }}]);
+  renderArtifacts(els.artifactList, []);
+  renderProgress({
+    total: 0, completed: 0, active: 0, failed: 0, percent: 0,
+    current_stage: "web_job", current_status: "queued", modules: [],
+  });
+  renderGenerationTree(null);
   try {
     const started = await postJSON("/api/run", {
       task_id: state.selected.task_id,
       sample: 1,
       max_repair_attempts: maxRepairAttempts,
+      decomposition_mode: state.decompositionMode,
     });
     els.statusText.textContent = `Running job ${started.job_id}.`;
     await pollJob(started.job_id);
@@ -1969,6 +2672,8 @@ async function runSelected() {
     els.runBtn.disabled = false;
     els.indexBtn.disabled = false;
     els.maxRepairAttempts.disabled = false;
+    els.originalDecompositionBtn.disabled = false;
+    els.chunkingDecompositionBtn.disabled = false;
   }
 }
 
@@ -1976,13 +2681,23 @@ async function pollJob(jobId) {
   for (;;) {
     const payload = await getJSON(`/api/job?job_id=${encodeURIComponent(jobId)}`);
     renderStages(payload.stages || []);
+    renderArtifacts(els.artifactList, payload.artifacts || []);
+    renderProgress(payload.progress || null);
+    renderGenerationTree(payload.generation_tree || null);
+    if (payload.live_generated_code) {
+      els.codeText.textContent = payload.live_generated_code;
+    }
     if (payload.state === "complete" || payload.state === "error") {
-      if (payload.state === "error") throw new Error(payload.error || "Run failed");
       const result = payload.result;
+      if (payload.state === "error") {
+        if (payload.live_generated_code) els.codeText.textContent = payload.live_generated_code;
+        throw new Error(payload.error || "Run failed");
+      }
       els.docCount.textContent = String(result.index.doc_count);
       renderDeps(state.selected.dependencies.map(name => ({name})), result.index);
       els.resultMetric.textContent = result.record.passed ? "pass" : "fail";
-      els.codeText.textContent = result.generated_code || "";
+      els.codeText.textContent = result.generated_code || payload.live_generated_code || "";
+      renderArtifacts(els.artifactList, payload.artifacts || []);
       els.statusText.textContent = formatRun(result);
       return;
     }
@@ -2010,6 +2725,152 @@ function renderStages(stages) {
   els.stageList.scrollTop = els.stageList.scrollHeight;
 }
 
+function renderProgress(progress) {
+  const data = progress || {
+    total: 0, completed: 0, active: 0, failed: 0, percent: 0,
+    current_stage: "idle", current_status: "idle", modules: [],
+  };
+  const percent = Math.max(0, Math.min(100, Number(data.percent || 0)));
+  els.progressPercent.textContent = `${percent}%`;
+  els.progressBar.style.width = `${percent}%`;
+  els.progressCompleted.textContent = String(data.completed || 0);
+  els.progressTotal.textContent = String(data.total || 0);
+  els.progressActive.textContent = String(data.active || 0);
+  els.progressFailed.textContent = String(data.failed || 0);
+  els.progressPhase.textContent = `${stageName(data.current_stage)} · ${data.current_status || "idle"}`;
+  const modules = data.modules || [];
+  if (!modules.length) {
+    els.moduleProgressList.innerHTML = `<div class="module-progress planned"><strong>No submodules discovered</strong><small>They will appear here as planning progresses.</small></div>`;
+    return;
+  }
+  els.moduleProgressList.replaceChildren(...modules.map(module => {
+    const div = document.createElement("div");
+    const terminal = module.status === "complete" || module.status === "error";
+    div.className = `module-progress ${terminal ? module.status : module.status === "planned" ? "planned" : "active"}`;
+    const detail = [
+      module.status || "planned",
+      module.kind,
+      module.depth !== undefined ? `depth ${module.depth}` : "",
+      module.repair_attempts ? `${module.repair_attempts} repairs` : "",
+    ].filter(Boolean).join(" · ");
+    div.innerHTML = `<strong>${escapeHTML(module.name)}</strong><small>${escapeHTML(detail)}</small>`;
+    return div;
+  }));
+}
+
+function renderGenerationTree(tree) {
+  if (!tree) {
+    els.generationTreePanel.hidden = true;
+    els.generationTreeCanvas.replaceChildren();
+    return;
+  }
+  els.generationTreePanel.hidden = false;
+  const layout = layoutGenerationTree(tree);
+  const svg = svgElement("svg", {
+    viewBox: `0 0 ${layout.width} ${layout.height}`,
+    role: "img",
+    "aria-label": "Module generation hierarchy",
+  });
+  for (const edge of layout.edges) {
+    const midY = (edge.parent.y + edge.child.y) / 2;
+    svg.appendChild(svgElement("path", {
+      class: "tree-edge",
+      d: `M ${edge.parent.x} ${edge.parent.y + 31} C ${edge.parent.x} ${midY}, ${edge.child.x} ${midY}, ${edge.child.x} ${edge.child.y - 31}`,
+    }));
+  }
+  for (const entry of layout.nodes) {
+    const node = entry.node;
+    const terminal = node.status === "complete" || node.status === "error";
+    const statusClass = terminal ? node.status : node.status === "planned" ? "planned" : "active";
+    const group = svgElement("g", {
+      class: `tree-node ${statusClass}`,
+      transform: `translate(${entry.x - 80} ${entry.y - 31})`,
+    });
+    group.appendChild(svgElement("rect", {width: 160, height: 62, rx: 8}));
+    const name = svgElement("text", {class: "tree-name", x: 10, y: 23});
+    name.textContent = truncateLabel(node.module, 21);
+    group.appendChild(name);
+    const meta = svgElement("text", {class: "tree-meta", x: 10, y: 43});
+    meta.textContent = [
+      node.order ? `#${node.order}` : "",
+      node.kind || "module",
+      node.status || "planned",
+      node.repair_attempts ? `repairs ${node.repair_attempts}` : "",
+    ].filter(Boolean).join(" · ");
+    group.appendChild(meta);
+    const title = svgElement("title");
+    title.textContent = JSON.stringify({
+      module: node.module,
+      kind: node.kind,
+      status: node.status,
+      order: node.order,
+      repair_attempts: node.repair_attempts,
+      dependencies: node.dependencies,
+      reason: node.reason,
+    }, null, 2);
+    group.appendChild(title);
+    svg.appendChild(group);
+  }
+  els.generationTreeCanvas.replaceChildren(svg);
+  els.generationTreeSummary.textContent = `${Math.max(0, layout.nodes.length - 1)} submodules · ${layout.maxDepth} hierarchy levels · hover nodes for debug details`;
+}
+
+function layoutGenerationTree(root) {
+  const nodes = [];
+  const edges = [];
+  let leafIndex = 0;
+  let maxDepth = 0;
+  function visit(node, depth) {
+    maxDepth = Math.max(maxDepth, depth);
+    const childEntries = (node.children || []).map(child => visit(child, depth + 1));
+    const x = childEntries.length
+      ? childEntries.reduce((sum, child) => sum + child.x, 0) / childEntries.length
+      : 110 + leafIndex++ * 190;
+    const entry = {node, x, y: 55 + depth * 120};
+    nodes.push(entry);
+    for (const child of childEntries) edges.push({parent: entry, child});
+    return entry;
+  }
+  visit(root, 0);
+  return {
+    nodes,
+    edges,
+    maxDepth,
+    width: Math.max(300, 30 + Math.max(1, leafIndex) * 190),
+    height: 110 + maxDepth * 120,
+  };
+}
+
+function svgElement(name, attrs = {}) {
+  const element = document.createElementNS("http://www.w3.org/2000/svg", name);
+  for (const [key, value] of Object.entries(attrs)) element.setAttribute(key, String(value));
+  return element;
+}
+
+function truncateLabel(value, limit) {
+  const text = String(value || "module");
+  return text.length <= limit ? text : `${text.slice(0, limit - 1)}…`;
+}
+
+function renderArtifacts(container, artifacts) {
+  if (!artifacts.length) {
+    container.innerHTML = `<div class="stage"><strong>No artifacts yet</strong><small>Large-spec runs publish their index, scoped specs, RTL, and diagnostics here.</small></div>`;
+    return;
+  }
+  container.replaceChildren(...artifacts.map(artifact => {
+    const link = document.createElement("a");
+    link.className = "artifact-link";
+    link.href = artifact.url;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.innerHTML = `
+      <strong>${escapeHTML(artifact.label || artifact.name)}</strong>
+      <small>${escapeHTML(artifact.name)} · ${artifact.size || 0} bytes</small>
+    `;
+    return link;
+  }));
+}
+
 function stageName(name) {
   return String(name || "unknown").replace(/^llm:/, "LLM ").replace(/_/g, " ");
 }
@@ -2017,7 +2878,17 @@ function stageName(name) {
 function stageDetail(detail) {
   const parts = [];
   if (detail.module) parts.push(`module=${detail.module}`);
+  if (detail.top_module) parts.push(`top=${detail.top_module}`);
   if (detail.task) parts.push(`task=${detail.task}`);
+  if (detail.mode) parts.push(`mode=${detail.mode}`);
+  if (detail.activated !== undefined) parts.push(`activated=${detail.activated}`);
+  if (detail.prompt_chars !== undefined) parts.push(`prompt_chars=${detail.prompt_chars}`);
+  if (detail.chunk_count !== undefined) parts.push(`chunks=${detail.chunk_count}`);
+  if (detail.module_count !== undefined) parts.push(`modules=${detail.module_count}`);
+  if (detail.node_count !== undefined) parts.push(`nodes=${detail.node_count}`);
+  if (detail.depth !== undefined) parts.push(`depth=${detail.depth}`);
+  if (detail.child_count !== undefined) parts.push(`children=${detail.child_count}`);
+  if (detail.decision) parts.push(`decision=${detail.decision}`);
   if (detail.query) parts.push(`query=${detail.query}`);
   if (detail.candidate_count !== undefined) parts.push(`candidates=${detail.candidate_count}`);
   if (detail.doc_count !== undefined) parts.push(`docs=${detail.doc_count}`);
@@ -2038,6 +2909,7 @@ function formatLiveJob(payload) {
     job_id: payload.job_id,
     state: payload.state,
     max_repair_attempts: payload.max_repair_attempts,
+    decomposition_mode: payload.decomposition_mode,
     current_stage: last ? stageName(last.stage) : "queued",
     status: last?.status || "queued",
     detail: last?.detail || {},
@@ -2064,8 +2936,11 @@ function formatRun(payload) {
     selected_doc_ids: payload.record.selected_doc_ids,
     retrieved_doc_ids: payload.record.retrieved_doc_ids,
     repair_attempts: payload.record.repair_attempts,
+    decomposition_mode: payload.record.decomposition_mode,
     generated_code_path: payload.record.generated_code_path,
     agent_report_path: payload.record.agent_report_path,
+    agent_workspace_path: payload.record.agent_workspace_path,
+    module_generation: payload.record.module_generation,
     generation_error: payload.record.generation_error,
     evaluation_error: payload.record.evaluation_error,
   }, null, 2);
@@ -2073,7 +2948,10 @@ function formatRun(payload) {
 
 async function copyDemoLink() {
   if (!state.selected) return;
-  const url = `${location.origin}/demo?task=${encodeURIComponent(state.selected.task_id)}`;
+  const params = new URLSearchParams();
+  params.set("task", state.selected.task_id);
+  params.set("decomposition", state.decompositionMode);
+  const url = `${location.origin}/demo?${params.toString()}`;
   await navigator.clipboard.writeText(url);
   els.statusText.textContent = `Copied ${url}`;
 }

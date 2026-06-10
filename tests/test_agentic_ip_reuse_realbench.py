@@ -137,8 +137,93 @@ def test_dry_run_writes_records_and_realbench_solution_files(tmp_path):
     records = [json.loads(line) for line in records_path.read_text(encoding="utf-8").splitlines()]
     assert len(records) == 3
     assert records[0]["ip_db_doc_count"] >= 1
+    assert records[0]["agent_workspace_path"].endswith("sample01")
+    assert records[0]["agent_artifacts"] == {}
     assert (output / "samples" / "agentic_ip_reuse" / "aes.jsonl").exists()
     assert (output / "samples" / "agentic_ip_reuse" / "system.jsonl").exists()
+
+
+def test_native_system_verification_replaces_only_top_file_and_keeps_submodules(tmp_path):
+    module = load_script()
+    root = tmp_path / "real_bench"
+    make_fake_realbench(root)
+    fake_make = tmp_path / "fake_make.py"
+    write(
+        fake_make,
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "top = Path('aes_cipher_top_top.sv')\n"
+        "if not Path('aes_sbox.v').exists():\n"
+        "    print('missing submodule', file=sys.stderr)\n"
+        "    raise SystemExit(1)\n"
+        "if 'GENERATED_TOP' not in top.read_text(encoding='utf-8'):\n"
+        "    print('top file was not replaced', file=sys.stderr)\n"
+        "    raise SystemExit(1)\n"
+        "print('Hint: Output has no mismatches')\n",
+    )
+    fake_make.chmod(0o755)
+    args = parse_args(
+        module,
+        root,
+        tmp_path / "out",
+        "--task-level",
+        "system",
+        "--realbench-verifier",
+        "native",
+        "--make-bin",
+        str(fake_make),
+    )
+    task = module.discover_tasks(args)[0]
+
+    result = module.evaluate_realbench_code(
+        task,
+        "// GENERATED_TOP\nmodule aes_cipher_top; endmodule\n",
+        args,
+    )
+
+    assert result.passed
+    assert result.syntax == 1
+    assert result.function == 1
+
+
+def test_harness_system_verification_delegates_to_realbench_run_verify(tmp_path):
+    module = load_script()
+    root = tmp_path / "real_bench"
+    make_fake_realbench(root)
+    write(
+        root / "run_verify.py",
+        "from pathlib import Path\n"
+        "\n"
+        "def testbench_verification_system(code, system_name):\n"
+        "    assert system_name == 'aes_cipher_top'\n"
+        "    assert Path('system/aes_cipher_top/aes_sbox.v').exists()\n"
+        "    assert 'GENERATED_TOP' in code\n"
+        "    Path('harness_called.txt').write_text(system_name, encoding='utf-8')\n"
+        "    return 1, 1, '', ''\n"
+        "\n"
+        "def testbench_verification(code, system_name, module_name):\n"
+        "    raise AssertionError('system task should use system harness function')\n",
+    )
+    args = parse_args(
+        module,
+        root,
+        tmp_path / "out",
+        "--task-level",
+        "system",
+        "--realbench-verifier",
+        "harness",
+    )
+    task = module.discover_tasks(args)[0]
+
+    result = module.evaluate_realbench_code(
+        task,
+        "// GENERATED_TOP\nmodule aes_cipher_top; endmodule\n",
+        args,
+    )
+
+    assert result.passed
+    assert (root / "harness_called.txt").read_text(encoding="utf-8") == "aes_cipher_top"
 
 
 def test_rtl_mosaic_bridge_delegates_to_agentic_engine(tmp_path):

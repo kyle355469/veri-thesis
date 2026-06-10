@@ -111,6 +111,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rtl-mosaic-root", default="/home/kai/eval_dt/rtl-mosaic")
     parser.add_argument("--chipbench-root", default="/home/kai/eval_dt/ChipBench/Verilog Gen")
     parser.add_argument("--rtl-mosaic-engine", choices=["agentic", "harness"], default="agentic")
+    parser.add_argument(
+        "--realbench-verifier",
+        choices=["native", "harness"],
+        default="native",
+        help=(
+            "RealBench testbench evaluator. native copies the verification directory directly; "
+            "harness delegates to RealBench run_verify.py."
+        ),
+    )
     parser.add_argument("--output-dir", default="runs/agentic_ip_reuse_realbench")
     parser.add_argument("--solution-name", default="agentic_ip_reuse")
     parser.add_argument("--task-level", choices=["module", "system", "both"], default="both")
@@ -141,6 +150,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-tokens", type=int, default=30000)
 
     parser.add_argument("--max-repair-attempts", type=int, default=2)
+    parser.add_argument("--max-generation-retries", type=int, default=2)
+    parser.add_argument("--large-spec-threshold-chars", type=int, default=40000)
+    parser.add_argument("--large-spec-chunk-chars", type=int, default=30000)
+    parser.add_argument("--decomposition-mode", choices=["original", "chunking"], default="original")
+    parser.add_argument("--recursive-decomposition", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--recursive-max-depth", type=int, default=4)
+    parser.add_argument("--recursive-max-nodes", type=int, default=64)
     parser.add_argument("--yosys-bin", default="yosys")
     parser.add_argument("--verilator-bin", default="verilator")
     parser.add_argument("--agent-timeout-s", type=int, default=30)
@@ -429,6 +445,7 @@ def build_agent(
     args: argparse.Namespace,
     index_dir: Path,
     stage_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    task: Optional[Any] = None,
 ) -> AgenticIpReuseAgent:
     embedder = make_embedder(args.embedder)
     store = VectorStore.load(index_dir)
@@ -444,6 +461,7 @@ def build_agent(
         api_key=args.api_key or os.getenv("VLLM_API_KEY", "EMPTY"),
         timeout_s=args.llm_timeout_s,
     )
+    testbench_dir = task_verification_dir(task) if task is not None else None
     return AgenticIpReuseAgent(
         llm,
         retrieval_context,
@@ -455,6 +473,14 @@ def build_agent(
             max_repair_attempts=args.max_repair_attempts,
             temperature=args.temperature,
             max_tokens=args.max_tokens,
+            large_spec_threshold_chars=args.large_spec_threshold_chars,
+            large_spec_chunk_chars=args.large_spec_chunk_chars,
+            decomposition_mode=args.decomposition_mode,
+            recursive_decomposition=args.recursive_decomposition,
+            recursive_max_depth=args.recursive_max_depth,
+            recursive_max_nodes=args.recursive_max_nodes,
+            testbench_dir=testbench_dir,
+            max_generation_retries=getattr(args, "max_generation_retries", 2),
         ),
         stage_callback=stage_callback,
     )
@@ -470,6 +496,27 @@ def generated_code_path(output_dir: Path, item: WorkItem) -> Path:
 
 def report_path(output_dir: Path, item: WorkItem) -> Path:
     return output_dir / "reports" / item.task.level / item.task.system / f"{item.task.task}_sample{item.sample:02d}.json"
+
+
+def agent_workspace_path(output_dir: Path, item: WorkItem) -> Path:
+    return (
+        output_dir
+        / "workspaces"
+        / (safe_name(item.task.level) or "unknown_level")
+        / (safe_name(item.task.system) or "unknown_system")
+        / (safe_name(item.task.task) or "unknown_task")
+        / f"sample{item.sample:02d}"
+    )
+
+
+def collect_workspace_artifacts(workspace: Path) -> Dict[str, str]:
+    if not workspace.exists():
+        return {}
+    return {
+        str(path.relative_to(workspace)): str(path)
+        for path in sorted(workspace.rglob("*"))
+        if path.is_file()
+    }
 
 
 def run_one(
@@ -494,6 +541,11 @@ def run_one(
     selected_doc_ids: List[str] = []
     retrieved_doc_ids: List[str] = []
     repair_attempts: Optional[int] = None
+    workspace = agent_workspace_path(output_dir, item)
+    artifacts: Dict[str, str] = {}
+    module_generation: List[Dict[str, Any]] = []
+    large_spec_manifest: Optional[Dict[str, Any]] = None
+    decomposition_tree: Optional[Dict[str, Any]] = None
 
     if not bundle.usable:
         generation_error = f"missing dependency source(s): {', '.join(bundle.missing_dependencies)}"
@@ -505,12 +557,13 @@ def run_one(
     else:
         t0 = time.perf_counter()
         try:
-            agent = build_agent(args, bundle.index_dir, stage_callback=stage_callback)
+            agent = build_agent(args, bundle.index_dir, stage_callback=stage_callback, task=task)
             result = agent.run(
                 task.prompt,
                 target_hdl="verilog",
                 top_module=task.top_module,
                 constraints=task_constraints(task),
+                workspace_dir=workspace,
             )
             code = normalize_code(result.rtl, task.top_module)
             selected_doc_ids = [
@@ -526,6 +579,10 @@ def run_one(
                 }
             )
             repair_attempts = result.repair_attempts
+            artifacts = dict(result.artifacts)
+            module_generation = list(result.module_generation)
+            large_spec_manifest = result.large_spec_manifest
+            decomposition_tree = result.decomposition_tree
             report.write_text(dumps_result(result), encoding="utf-8")
             agent_report_written = True
         except Exception as exc:  # noqa: BLE001 - keep the benchmark moving.
@@ -556,11 +613,14 @@ def run_one(
             error=generation_error or "generation produced empty code",
         )
 
+    artifacts = {**collect_workspace_artifacts(workspace), **artifacts}
     return {
         "benchmark": "realbench",
         "task_level": task.level,
         "system": task.system,
         "task": task.task,
+        "realbench_verifier": getattr(args, "realbench_verifier", "native"),
+        "decomposition_mode": getattr(args, "decomposition_mode", "original"),
         "sample": item.sample,
         "top_module": task.top_module,
         "dependencies": task.dependencies,
@@ -578,6 +638,11 @@ def run_one(
         "generation_error": generation_error,
         "generated_code_path": str(code_path) if code else None,
         "agent_report_path": str(report) if agent_report_written else None,
+        "agent_workspace_path": str(workspace),
+        "agent_artifacts": artifacts,
+        "module_generation": module_generation,
+        "large_spec_manifest": large_spec_manifest,
+        "decomposition_tree": decomposition_tree,
         "repair_attempts": repair_attempts,
         "syntax": eval_result.syntax,
         "function": eval_result.function,
@@ -614,6 +679,12 @@ def normalize_code(code: str, top_module: str) -> str:
 
 
 def evaluate_realbench_code(task: RealBenchTask, code: str, args: argparse.Namespace) -> RealBenchEvalResult:
+    if getattr(args, "realbench_verifier", "native") == "harness":
+        return evaluate_realbench_code_with_harness(task, code, args)
+    return evaluate_realbench_code_native(task, code, args)
+
+
+def evaluate_realbench_code_native(task: RealBenchTask, code: str, args: argparse.Namespace) -> RealBenchEvalResult:
     template_dir = task_verification_dir(task)
     if not template_dir.exists():
         return RealBenchEvalResult(0, 0, error=f"verification directory not found: {template_dir}")
@@ -660,6 +731,102 @@ def evaluate_realbench_code(task: RealBenchTask, code: str, args: argparse.Names
         stderr_tail=stderr[-4000:],
         error=error,
     )
+
+
+def evaluate_realbench_code_with_harness(
+    task: RealBenchTask,
+    code: str,
+    args: argparse.Namespace,
+) -> RealBenchEvalResult:
+    root = Path(args.realbench_root)
+    harness = root / "run_verify.py"
+    if not harness.exists():
+        return RealBenchEvalResult(0, 0, error=f"RealBench harness not found: {harness}")
+
+    runner = (
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        "import run_verify\n"
+        "level, system_name, task_name, code_path = sys.argv[1:5]\n"
+        "code = Path(code_path).read_text(encoding='utf-8')\n"
+        "if level == 'system':\n"
+        "    result = run_verify.testbench_verification_system(code, task_name)\n"
+        "else:\n"
+        "    result = run_verify.testbench_verification(code, system_name, task_name)\n"
+        "print(json.dumps({\n"
+        "    'syntax': result[0],\n"
+        "    'function': result[1],\n"
+        "    'syntax_info': result[2],\n"
+        "    'function_info': result[3],\n"
+        "}))\n"
+    )
+
+    try:
+        with tempfile.TemporaryDirectory(prefix=f"realbench_harness_{task.task}_") as temp_name:
+            code_path = Path(temp_name) / f"{task.task}_top.sv"
+            code_path.write_text(code, encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    runner,
+                    task.level,
+                    task.system,
+                    task.task,
+                    str(code_path),
+                ],
+                cwd=root,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=args.verification_timeout_s + 30,
+            )
+    except subprocess.TimeoutExpired as exc:
+        return RealBenchEvalResult(0, 0, error=f"RealBench harness timeout: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        return RealBenchEvalResult(0, 0, error=f"RealBench harness failed: {exc}")
+
+    stdout = completed.stdout or ""
+    stderr = completed.stderr or ""
+    payload = parse_harness_result(stdout)
+    if completed.returncode != 0 or payload is None:
+        return RealBenchEvalResult(
+            0,
+            0,
+            compile_returncode=completed.returncode,
+            run_returncode=completed.returncode,
+            stdout_tail=stdout[-4000:],
+            stderr_tail=stderr[-4000:],
+            error=f"RealBench harness failed with return code {completed.returncode}",
+        )
+
+    syntax = int(payload.get("syntax") == 1)
+    function = int(syntax == 1 and payload.get("function") == 1)
+    return RealBenchEvalResult(
+        syntax=syntax,
+        function=function,
+        syntax_info=str(payload.get("syntax_info") or ""),
+        function_info=str(payload.get("function_info") or ""),
+        compile_returncode=completed.returncode,
+        run_returncode=completed.returncode,
+        stdout_tail=stdout[-4000:],
+        stderr_tail=stderr[-4000:],
+        error=None if syntax == 1 else "RealBench harness reported syntax failure",
+    )
+
+
+def parse_harness_result(stdout: str) -> Optional[Dict[str, Any]]:
+    for line in reversed(stdout.splitlines()):
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if {"syntax", "function", "syntax_info", "function_info"} <= set(payload):
+            return payload
+    return None
 
 
 def copy_verification_template(source: Path, destination: Path) -> None:
@@ -788,7 +955,7 @@ def run_realbench(args: argparse.Namespace) -> Dict[str, Any]:
 
     items = work_items(tasks, args.samples)
     if args.dry_run:
-        records = [dry_run_record(item, indexes[item.task.task_id]) for item in items]
+        records = [dry_run_record(item, indexes[item.task.task_id], output_dir, args) for item in items]
     else:
         records = []
         records_lock = threading.Lock()
@@ -815,13 +982,19 @@ def run_realbench(args: argparse.Namespace) -> Dict[str, Any]:
     return summary
 
 
-def dry_run_record(item: WorkItem, bundle: IndexBundle) -> Dict[str, Any]:
+def dry_run_record(
+    item: WorkItem,
+    bundle: IndexBundle,
+    output_dir: Path,
+    args: argparse.Namespace,
+) -> Dict[str, Any]:
     task = item.task
     return {
         "benchmark": "realbench",
         "task_level": task.level,
         "system": task.system,
         "task": task.task,
+        "realbench_verifier": getattr(args, "realbench_verifier", "native"),
         "sample": item.sample,
         "top_module": task.top_module,
         "dependencies": task.dependencies,
@@ -837,6 +1010,11 @@ def dry_run_record(item: WorkItem, bundle: IndexBundle) -> Dict[str, Any]:
         "generation_error": "dry run",
         "generated_code_path": None,
         "agent_report_path": None,
+        "agent_workspace_path": str(agent_workspace_path(output_dir, item)),
+        "agent_artifacts": {},
+        "module_generation": [],
+        "large_spec_manifest": None,
+        "decomposition_tree": None,
         "repair_attempts": None,
         "syntax": 0,
         "function": 0,

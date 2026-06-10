@@ -31,6 +31,10 @@ class VectorStore:
             for idx in top_indices
         ]
 
+    def add(self, document: RtlDocument, vector: np.ndarray) -> None:
+        self.documents = [*self.documents, document]
+        self.vectors = np.vstack([self.vectors, np.asarray(vector, dtype=np.float32).reshape(1, -1)])
+
     def save(self, directory: str | Path) -> None:
         directory = Path(directory)
         print(f"Saving vector store to {directory}...")

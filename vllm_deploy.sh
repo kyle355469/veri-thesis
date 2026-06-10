@@ -29,6 +29,19 @@ fi
 # Optional: Hugging Face cache path
 export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
 
+if ! command -v vllm >/dev/null 2>&1; then
+  cat >&2 <<'EOF'
+Error: the `vllm` executable is not available in this shell.
+
+This script starts only the OpenAI-compatible model API, not the website.
+Activate the environment where vLLM is installed, or install vLLM first.
+If a model API is already running on port 8000, start the agentic website separately:
+
+  python3 scripts/agentic_ip_reuse_web.py --host 127.0.0.1 --port 8780
+EOF
+  exit 127
+fi
+
 
 TOOL_ARGS=()
 if [ "$ENABLE_TOOL_CALLING" = "1" ]; then
@@ -51,7 +64,7 @@ echo "Served model name: ${SERVED_NAME}"
 echo "Tensor parallel size: ${TENSOR_PARALLEL_SIZE}"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 vllm serve "$MODEL" \
-  --max-model-len 131072 \
+  --max-model-len "$MAX_MODEL_LEN" \
   --served-model-name "$SERVED_NAME" \
   --host "$HOST" \
   --port "$PORT" \
