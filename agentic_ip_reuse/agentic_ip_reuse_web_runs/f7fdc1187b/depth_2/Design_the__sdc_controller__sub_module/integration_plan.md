@@ -1,0 +1,10 @@
+# Integration Plan
+
+- {'clock_domains': {'wishbone_clk': 'wb_clk', 'sd_clk': 'sd_clk', 'system_clk': 'sys_clk'}, 'connections': [{'from': 'wb_slave_if.wb_clk', 'to': 'clk_sync.clk_in'}, {'from': 'clk_sync.clk_out', 'to': 'cdc_fifo.wb_clk'}, {'from': 'cdc_fifo.wb_clk', 'to': 'wb_master_if.wb_clk'}, {'from': 'wb_slave_if.wb_rst_n', 'to': 'clk_sync.rst_n'}, {'from': 'clk_sync.rst_n', 'to': 'cdc_fifo.rst_n'}, {'from': 'cdc_fifo.rst_n', 'to': 'wb_master_if.rst_n'}, {'from': 'wb_slave_if.wb_dat_o', 'to': 'cdc_fifo.wb_dat_o'}, {'from': 'cdc_fifo.wb_dat_i', 'to': 'wb_master_if.wb_dat_i'}, {'from': 'wb_slave_if.wb_addr', 'to': 'cdc_fifo.wb_addr'}, {'from': 'cdc_fifo.wb_addr', 'to': 'wb_master_if.wb_addr'}, {'from': 'wb_slave_if.wb_we', 'to': 'cdc_fifo.wb_we'}, {'from': 'cdc_fifo.wb_we', 'to': 'wb_master_if.wb_we'}, {'from': 'wb_slave_if.wb_cyc', 'to': 'cdc_fifo.wb_cyc'}, {'from': 'cdc_fifo.wb_cyc', 'to': 'wb_master_if.wb_cyc'}, {'from': 'wb_slave_if.wb_stb', 'to': 'cdc_fifo.wb_stb'}, {'from': 'cdc_fifo.wb_stb', 'to': 'wb_master_if.wb_stb'}, {'from': 'wb_master_if.wb_ack', 'to': 'cdc_fifo.wb_ack'}, {'from': 'cdc_fifo.wb_ack', 'to': 'wb_slave_if.wb_ack'}, {'from': 'sd_clk_sep_logic.sd_clk_out', 'to': 'sdc_core_wrapper.sd_clk'}, {'from': 'sdc_core_wrapper.sd_cmd', 'to': 'sdio.cmd'}, {'from': 'sdc_core_wrapper.sd_dat', 'to': 'sdio.dat'}, {'from': 'sdc_core_wrapper.sd_clk', 'to': 'sdio.clk'}, {'from': 'sdc_core_wrapper.irq', 'to': 'irq_enable_logic.irq_in'}, {'from': 'irq_enable_logic.irq_out', 'to': 'irq'}], 'parameter_mapping': {'sd_clk_sep_logic.ENABLE': 'parameter SD_CLK_SEP_EN', 'sdc_core_wrapper.DATA_WIDTH': 32, 'sdc_core_wrapper.CMD_WIDTH': 6, 'sdc_core_wrapper.DAT_WIDTH': 4}}
+
+## Unresolved Assumptions
+- Exact reset polarity and active‑low vs active‑high for all sub‑modules.
+- Whether SD_CLK_SEP logic must generate a separate clock for the SD core or simply gate the existing sd_clk.
+- Maximum acceptable jitter on the sd_clk after separation.
+- Whether the Wishbone master interface must support burst transfers or only single‑beat transactions.
+- The target FPGA family and its clock‑domain crossing IP library availability.

@@ -1,0 +1,134 @@
+{
+  "requirements": {
+    "functionality": [
+      "Streaming data path with reusable FIFO and AXI-lite control"
+    ],
+    "performance": [
+      "Throughput target to be refined from system constraints"
+    ],
+    "io_interfaces": [
+      "AXI-lite control",
+      "valid-ready streaming data"
+    ],
+    "protocols": [
+      "AXI-lite",
+      "valid-ready"
+    ],
+    "ppa_constraints": [
+      "Prefer existing verified IP to reduce area and verification schedule risk"
+    ],
+    "clock_reset": [
+      "Single clock assumed for v1 unless CDC is requested"
+    ],
+    "assumptions": [
+      "Exact sample rate, data width, and timing target are unresolved"
+    ]
+  },
+  "modules": [
+    {
+      "name": "Input Interface",
+      "role": "Accept streaming input and enforce protocol",
+      "interfaces": [
+        "valid-ready"
+      ],
+      "reuse_preference": "adapter or existing stream endpoint",
+      "verification_needs": [
+        "protocol assertions"
+      ]
+    },
+    {
+      "name": "Buffer / FIFO",
+      "role": "Elastic buffering between interface and core",
+      "interfaces": [
+        "valid-ready"
+      ],
+      "reuse_preference": "reuse sync_fifo",
+      "verification_needs": [
+        "overflow/underflow tests"
+      ]
+    },
+    {
+      "name": "Processing Core",
+      "role": "Perform requested datapath computation",
+      "interfaces": [
+        "valid-ready"
+      ],
+      "reuse_preference": "search datapath IP, otherwise new RTL",
+      "verification_needs": [
+        "golden model comparison"
+      ]
+    },
+    {
+      "name": "Memory Controller",
+      "role": "Coordinate coefficient/state memory if needed",
+      "interfaces": [
+        "AXI-lite",
+        "SRAM"
+      ],
+      "reuse_preference": "reuse register bank or SRAM adapter",
+      "verification_needs": [
+        "register and memory access tests"
+      ]
+    },
+    {
+      "name": "Output Interface",
+      "role": "Present processed stream downstream",
+      "interfaces": [
+        "valid-ready"
+      ],
+      "reuse_preference": "adapter or existing stream endpoint",
+      "verification_needs": [
+        "backpressure tests"
+      ]
+    }
+  ],
+  "reuse_decisions": [
+    {
+      "module_name": "Buffer / FIFO",
+      "selected_ip": "sync_fifo",
+      "rejected_ips": [],
+      "required_adapters": [
+        "Map data valid-ready to FIFO push/pop if native ports differ"
+      ],
+      "parameterization": {
+        "DATA_WIDTH": "match stream width",
+        "DEPTH": "size from burst/backpressure target"
+      },
+      "risk_notes": [
+        "Confirm almost-full/almost-empty semantics"
+      ],
+      "new_rtl_required": false
+    },
+    {
+      "module_name": "Processing Core",
+      "selected_ip": null,
+      "rejected_ips": [],
+      "required_adapters": [],
+      "parameterization": {},
+      "risk_notes": [
+        "No computation-specific IP selected in mock run"
+      ],
+      "new_rtl_required": true
+    }
+  ],
+  "integration_plan": [
+    "Instantiate selected IPs behind thin wrappers",
+    "Normalize resets and handshakes",
+    "Document parameter choices before RTL integration"
+  ],
+  "verification_plan": [
+    "Run IP unit testbenches",
+    "Add protocol assertions for AXI-lite and valid-ready",
+    "Run lint, synthesis elaboration, and timing smoke checks"
+  ],
+  "debug_plan": [
+    "Start with module-level simulation",
+    "Trace handshakes across adapters",
+    "Promote passing configurations into reusable catalog metadata"
+  ],
+  "unresolved_assumptions": [
+    "Concrete PPA target",
+    "Exact data width",
+    "Clock-domain requirements"
+  ]
+}

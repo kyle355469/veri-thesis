@@ -1,0 +1,26 @@
+{
+  "depth": 0,
+  "prompt_preview": "# sdc_controller design specification\\n\\n\\n## Introduction\\n\\nThis module is the interface between the SDC Core and t...",
+  "modules": 13,
+  "steps": 1,
+  "stopped_reason": "forced_final",
+  "children": {
+    "sdc_controller": {
+      "depth": 1,
+      "prompt_preview": "Design the 'sdc_controller' sub-module. Role: . Detailed specification: Top‑level module that wires all sub‑blocks to...",
+      "modules": 8,
+      "steps": 1,
+      "stopped_reason": "forced_final",
+      "children": {
+        "sdc_controller": {
+          "depth": 2,
+          "prompt_preview": "Design the 'sdc_controller' sub-module. Role: . Detailed specification: {'description': 'Top‑level module that wires ...",
+          "modules": 7,
+          "steps": 1,
+          "stopped_reason": "forced_final",
+          "children": {}
+        }
+      }
+    }
+  }
+}

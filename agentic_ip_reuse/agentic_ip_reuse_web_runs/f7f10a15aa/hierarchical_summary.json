@@ -1,0 +1,8 @@
+{
+  "depth": 0,
+  "prompt_preview": "Build a simple streaming FIR accelerator with reusable FIFO and AXI-lite control",
+  "modules": 0,
+  "steps": 1,
+  "stopped_reason": "forced_final",
+  "children": {}
+}

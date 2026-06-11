@@ -1,0 +1,7 @@
+# Verification, Synthesis, and Debug Plan
+
+## Verification
+- {'simulation': {'environment': 'UVM', 'testbenches': ['tb_sdc_controller_top.sv', 'tb_sdc_core_wrapper.sv'], 'stimuli': ['Wishbone bus traffic generator', 'Clock domain crossing stress test', 'SD_CLK_SEP enable/disable toggling', 'IRQ enable gating'], 'coverage': {'functional': True, 'code': True, 'interface': True}}, 'synthesis': {'tool': 'Synopsys Design Compiler', 'constraints': ['max_frequency 100MHz', 'area 5kGE'], 'reporting': ['timing_summary.rpt', 'area_report.rpt']}, 'formal': {'properties': ['No bus transaction stalls > 5 cycles', 'CDC FIFO depth never underflows/overflows', 'SD_CLK_SEP toggles only when enabled', 'IRQ only asserted when enabled and core asserts'], 'tool': 'Cadence JasperGold'}}
+
+## Debug
+- {'waveform_analysis': ['wb_slave_if', 'wb_master_if', 'cdc_fifo', 'clk_sync', 'sd_clk_sep_logic', 'irq_enable_logic', 'sdc_core_wrapper'], 'assertions': ['assert property (posedge wb_clk_i) disable iff (wb_rst_i) (wb_stb_i && wb_cyc_i) |-> wb_ack_o;', 'assert property (posedge sdc_clk_i) disable iff (sdc_rst_i) (fifo_write_en) |-> !fifo_full;', 'assert property (posedge wb_clk_i) disable iff (wb_rst_i) (fifo_read_en) |-> !fifo_empty;'], 'coverage_points': ['wb_slave_if: register write/read', 'wb_master_if: burst transfer', 'cdc_fifo: depth usage', 'sd_clk_sep_logic: enable/disable transitions', 'irq_enable_logic: gating behavior'], 'debug_probes': ['core_status', 'fifo_status', 'sd_clk_state', 'irq_state']}

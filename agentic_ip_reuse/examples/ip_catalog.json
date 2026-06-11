@@ -1,0 +1,130 @@
+{
+  "ips": [
+    {
+      "ip_id": "sync_fifo",
+      "name": "Parameterized Synchronous FIFO",
+      "summary": "Single-clock elastic buffer for streaming valid-ready datapaths with configurable width and depth.",
+      "category": "buffer",
+      "interfaces": ["valid-ready", "push-pop"],
+      "parameters": {
+        "DATA_WIDTH": "8..1024",
+        "DEPTH": "2..4096",
+        "ALMOST_FULL": "optional threshold"
+      },
+      "license": "Apache-2.0",
+      "verification": ["self-checking testbench", "overflow and underflow regression", "Verilator lint"],
+      "synthesis": "Yosys and commercial ASIC synthesis smoke tested; timing closure depends on depth.",
+      "documentation": "Integration notes, timing diagram, parameter table, and example wrapper included.",
+      "tags": ["fifo", "buffer", "streaming", "valid", "ready", "elastic"],
+      "criteria": {
+        "function_match": "Implements buffering and backpressure decoupling.",
+        "interface_compatibility": "Native valid-ready wrapper and simple push/pop core ports.",
+        "configurability": "Width, depth, and almost-full mode configurable.",
+        "verification_status": "Includes directed and randomized testbench.",
+        "license": "Permissive Apache-2.0.",
+        "synthesis_support": "Known to elaborate and synthesize.",
+        "documentation_quality": "Has integration notes and waveform examples."
+      },
+      "behavior": "Stores input beats when valid and space are available; presents output beats until downstream ready consumes them.",
+      "integration_notes": [
+        "Match DATA_WIDTH to stream payload width.",
+        "Size DEPTH from maximum tolerated backpressure and burst length.",
+        "Confirm reset polarity before wrapper integration."
+      ],
+      "known_limits": ["Single clock only", "Large depths should infer memory rather than flops"]
+    },
+    {
+      "ip_id": "axi_lite_reg_bank",
+      "name": "AXI-lite Register Bank",
+      "summary": "Configurable AXI-lite slave register block for control/status paths.",
+      "category": "control",
+      "interfaces": ["AXI-lite", "register-file"],
+      "parameters": {
+        "ADDR_WIDTH": "8..32",
+        "DATA_WIDTH": "32 or 64",
+        "NUM_REGS": "1..256"
+      },
+      "license": "BSD-3-Clause",
+      "verification": ["AXI-lite protocol testbench", "basic formal checks", "lint clean"],
+      "synthesis": "FPGA and ASIC synthesis supported with registered read data.",
+      "documentation": "Complete register-map examples and integration checklist.",
+      "tags": ["axi", "axi-lite", "control", "register", "csr"],
+      "criteria": {
+        "function_match": "Provides control/status registers.",
+        "interface_compatibility": "Native AXI-lite slave.",
+        "configurability": "Address width, data width, and register count configurable.",
+        "verification_status": "Protocol testbench and formal checks available.",
+        "license": "Permissive BSD-3-Clause.",
+        "synthesis_support": "FPGA and ASIC synthesis supported.",
+        "documentation_quality": "Register-map examples included."
+      },
+      "behavior": "Accepts AXI-lite reads and writes, maps them into software-visible registers, and exposes register fields to hardware.",
+      "integration_notes": [
+        "Freeze register map before firmware handoff.",
+        "Add side-effect semantics for clear-on-write or pulse fields in wrapper logic."
+      ],
+      "known_limits": ["No AXI burst support", "No clock-domain crossing"]
+    },
+    {
+      "ip_id": "sram_controller",
+      "name": "Simple SRAM Controller",
+      "summary": "Single-port SRAM controller with request/response handshake and optional byte enables.",
+      "category": "memory",
+      "interfaces": ["valid-ready", "SRAM"],
+      "parameters": {
+        "ADDR_WIDTH": "8..32",
+        "DATA_WIDTH": "8..128",
+        "BYTE_ENABLE": "true or false"
+      },
+      "license": "MIT",
+      "verification": ["directed memory tests", "Verilator lint"],
+      "synthesis": "Synthesizes to SRAM macro wrapper or FPGA block RAM wrapper.",
+      "documentation": "Basic timing diagram and macro-binding notes.",
+      "tags": ["memory", "sram", "controller", "valid", "ready"],
+      "criteria": {
+        "function_match": "Mediates reads and writes to single-port memory.",
+        "interface_compatibility": "Valid-ready request path and SRAM macro pins.",
+        "configurability": "Address, data, and byte-enable modes configurable.",
+        "verification_status": "Directed tests are available.",
+        "license": "Permissive MIT.",
+        "synthesis_support": "Macro and FPGA wrapper styles supported.",
+        "documentation_quality": "Basic but sufficient integration notes."
+      },
+      "behavior": "Serializes memory read/write requests and returns read data after configured latency.",
+      "integration_notes": [
+        "Set latency to match selected memory macro.",
+        "Check byte-enable polarity against target memory compiler."
+      ],
+      "known_limits": ["Single outstanding transaction", "Single-port memory only"]
+    },
+    {
+      "ip_id": "stream_width_adapter",
+      "name": "Streaming Width Adapter",
+      "summary": "Packs or unpacks valid-ready stream payloads between different data widths.",
+      "category": "interface",
+      "interfaces": ["valid-ready"],
+      "parameters": {
+        "IN_WIDTH": "1..1024",
+        "OUT_WIDTH": "1..1024",
+        "ENDIAN_MODE": "little or big"
+      },
+      "license": "Apache-2.0",
+      "verification": ["packing/unpacking testbench", "randomized backpressure regression"],
+      "synthesis": "Synthesis-ready for integer width ratios.",
+      "documentation": "Examples for widening, narrowing, and backpressure behavior.",
+      "tags": ["streaming", "width", "adapter", "valid", "ready", "interface"],
+      "criteria": {
+        "function_match": "Adapts stream payload width.",
+        "interface_compatibility": "Native valid-ready input and output.",
+        "configurability": "Input and output widths configurable.",
+        "verification_status": "Randomized tests cover backpressure.",
+        "license": "Permissive Apache-2.0.",
+        "synthesis_support": "Synthesis-ready for supported ratios.",
+        "documentation_quality": "Includes examples."
+      },
+      "behavior": "Accumulates or splits stream beats while preserving valid-ready flow control.",
+      "integration_notes": ["Confirm packet boundary behavior if packets are present."],
+      "known_limits": ["Requires integer width ratio in v1"]
+    }
+  ]
+}

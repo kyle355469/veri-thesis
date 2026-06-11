@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentic-ip-reuse"
+version = "0.1.0"
+description = "Agentic framework for IC design planning with reusable IP."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Kai" }]
+dependencies = []
+
+[project.scripts]
+agentic-ip-reuse = "agentic_ip_reuse.cli:main"
+agentic-ip-reuse-web = "agentic_ip_reuse.web:main"
+
+[tool.setuptools]
+packages = ["agentic_ip_reuse"]

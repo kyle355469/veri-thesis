@@ -13,7 +13,11 @@ from .config import AgenticIpReuseConfig
 from .manifest import (
     dependency_order as _dependency_order,
     manifest_validation_errors as _manifest_validation_errors,
+    prepare_workspace as _prepare_workspace,
     recursive_decomposition_validation_errors as _recursive_decomposition_validation_errors,
+    render_manifest_index as _render_manifest_index,
+    render_module_spec as _render_module_spec,
+    write_text as _write_text,
 )
 from .planning import (
     modules_from_payload as _modules_from_payload,
@@ -131,10 +135,123 @@ class AgenticIpReuseAgent(
         decisions = self._build_decisions(modules, llm_traces, retrieval_traces)
 
         plan = IpReusePlan(requirements=requirements, modules=modules, decisions=decisions)
+        return self._run_rtl_generation_from_plan(
+            plan,
+            target=target,
+            top_module=top_module,
+            llm_traces=llm_traces,
+            retrieval_traces=retrieval_traces,
+            original_spec=prompt,
+        )
+
+    def run_from_plan(
+        self,
+        plan: IpReusePlan,
+        *,
+        target_hdl: Optional[str] = None,
+        top_module: Optional[str] = None,
+        workspace_dir: Optional[str | Path] = None,
+        original_spec: Optional[str] = None,
+        reuse_modules: Optional[Dict[str, str]] = None,
+        environment_notes: Optional[List[str]] = None,
+    ) -> AgenticIpReuseResult:
+        target = target_hdl or self.config.target_hdl
+        llm_traces: List[LlmTrace] = []
+        self._stage(
+            "agent_start",
+            "running",
+            top_module=top_module,
+            target_hdl=target,
+            source="plan",
+            module_count=len(plan.modules),
+        )
+        self._stage(
+            "plan_input",
+            "complete",
+            module_count=len(plan.modules),
+            modules=[module.name for module in plan.modules],
+        )
+        return self._run_rtl_generation_from_plan(
+            plan,
+            target=target,
+            top_module=top_module,
+            llm_traces=llm_traces,
+            retrieval_traces=[],
+            workspace_dir=workspace_dir,
+            original_spec=original_spec,
+            reuse_modules=reuse_modules,
+            environment_notes=environment_notes,
+        )
+
+    def condense_spec(
+        self,
+        prompt: str,
+        *,
+        target_hdl: Optional[str] = None,
+        top_module: Optional[str] = None,
+        constraints: Optional[Iterable[str]] = None,
+        workspace_dir: Optional[str | Path] = None,
+        llm_traces: Optional[List[LlmTrace]] = None,
+    ) -> str:
+        """Chunk & merge an oversized spec into a bounded structured summary.
+
+        Reuses the large-spec partition pipeline (markdown chunking, per-chunk extraction,
+        manifest merge) and renders the resulting manifest as a compact text spec that
+        preserves module names, ports, and behavioral requirements.
+        """
+        workspace = _prepare_workspace(workspace_dir)
+        traces: List[LlmTrace] = llm_traces if llm_traces is not None else []
+        artifacts: Dict[str, str] = {}
+        manifest = self._partition_large_spec(
+            prompt,
+            target=target_hdl or self.config.target_hdl,
+            top_module=top_module,
+            constraints=list(constraints or []),
+            llm_traces=traces,
+            workspace=workspace,
+            artifacts=artifacts,
+        )
+        module_payloads = {item["name"]: item for item in manifest["modules"]}
+        sections = [_render_manifest_index(manifest)]
+        sections.extend(
+            _render_module_spec(manifest, payload, module_payloads)
+            for payload in manifest["modules"]
+        )
+        condensed = "\n\n".join(sections)
+        _write_text(workspace / "condensed_spec.txt", condensed)
+        self._stage(
+            "spec_condensation",
+            "complete",
+            original_chars=len(prompt),
+            condensed_chars=len(condensed),
+            module_count=len(manifest["modules"]),
+        )
+        return condensed
+
+    def _run_rtl_generation_from_plan(
+        self,
+        plan: IpReusePlan,
+        *,
+        target: str,
+        top_module: Optional[str],
+        llm_traces: List[LlmTrace],
+        retrieval_traces: List[Dict[str, Any]],
+        workspace_dir: Optional[str | Path] = None,
+        original_spec: Optional[str] = None,
+        reuse_modules: Optional[Dict[str, str]] = None,
+        environment_notes: Optional[List[str]] = None,
+    ) -> AgenticIpReuseResult:
         self._stage("rtl_generation", "running", top_module=top_module)
         final_text = self._complete_text(
             "rtl_generation",
-            build_rtl_generation_prompt(plan, target, top_module),
+            build_rtl_generation_prompt(
+                plan,
+                target,
+                top_module,
+                original_spec=original_spec,
+                reuse_modules=reuse_modules,
+                environment_notes=environment_notes,
+            ),
             llm_traces,
         )
         rtl = extract_code(final_text)
@@ -150,7 +267,16 @@ class AgenticIpReuseAgent(
             self._stage("repair", "running", attempt=repair_attempts)
             final_text = self._complete_text(
                 f"repair_{repair_attempts}",
-                build_repair_prompt(plan, rtl, diagnostics, target, top_module),
+                build_repair_prompt(
+                    plan,
+                    rtl,
+                    diagnostics,
+                    target,
+                    top_module,
+                    original_spec=original_spec,
+                    reuse_modules=reuse_modules,
+                    environment_notes=environment_notes,
+                ),
                 llm_traces,
             )
             rtl = extract_code(final_text)
@@ -168,5 +294,7 @@ class AgenticIpReuseAgent(
             llm_traces=llm_traces,
             retrieval_traces=retrieval_traces,
         )
+        if workspace_dir is not None:
+            result.workspace_dir = str(Path(workspace_dir).resolve())
         self._stage("agent_complete", "complete", passed=verification.passed, repair_attempts=repair_attempts)
         return result

@@ -1,0 +1,350 @@
+{
+  "requirements": {
+    "functionality": [
+      "Top‑level controller that connects the SDC Core to a Wishbone bus.",
+      "Provides a Wishbone slave interface for configuration/control.",
+      "Provides a Wishbone master interface for data transfer to/from the bus.",
+      "Handles clock‑domain crossing between the SDC Core clock domain and the system bus clock domain.",
+      "Implements optional SD_CLK_SEP logic to generate a separate SD clock when enabled.",
+      "Implements optional SDC_IRQ_ENABLE logic to gate interrupt generation.",
+      "Supports reset synchronization across clock domains.",
+      "Exposes status and error signals to the bus."
+    ],
+    "performance": [
+      "Maximum bus transaction latency: ≤ 5 WB cycles.",
+      "CDC FIFO depth: ≥ 64 words to accommodate burst transfers.",
+      "SD_CLK_SEP generation must not exceed 10 % jitter relative to core clock."
+    ],
+    "I/O interface": {
+      "wb_slave": {
+        "address_width": 32,
+        "data_width": 32,
+        "sel_width": 4,
+        "clock": "wb_clk_i",
+        "reset": "wb_rst_i"
+      },
+      "wb_master": {
+        "address_width": 32,
+        "data_width": 32,
+        "sel_width": 4,
+        "clock": "wb_clk_i",
+        "reset": "wb_rst_i"
+      },
+      "core_clk": "sdc_clk_i",
+      "core_reset": "sdc_rst_i",
+      "sd_clk_sep": "sd_clk_o",
+      "irq_enable": "irq_en_i",
+      "irq_out": "irq_o"
+    },
+    "PPA constraints": {
+      "area": "≤ 5 kGE (generic logic elements)",
+      "power": "≤ 50 mW at 100 MHz system clock",
+      "timing": "All paths must meet 100 MHz clock period (10 ns)."
+    }
+  },
+  "modules": [
+    {
+      "name": "sdc_controller",
+      "needs_decomposition": true,
+      "sub_spec": {
+        "description": "Top‑level module that wires all sub‑blocks together.",
+        "submodules": [
+          "wb_slave_if",
+          "wb_master_if",
+          "cdc_fifo",
+          "clk_sync",
+          "sd_clk_sep_logic",
+          "irq_enable_logic",
+          "sdc_core_wrapper"
+        ]
+      }
+    },
+    {
+      "name": "wb_slave_if",
+      "needs_decomposition": false,
+      "description": "Wishbone slave interface IP."
+    },
+    {
+      "name": "wb_master_if",
+      "needs_decomposition": false,
+      "description": "Wishbone master interface IP."
+    },
+    {
+      "name": "cdc_fifo",
+      "needs_decomposition": false,
+      "description": "Dual‑clock FIFO for data transfer from core to bus."
+    },
+    {
+      "name": "clk_sync",
+      "needs_decomposition": false,
+      "description": "Two‑flip‑flop synchronizer for reset and control signals."
+    },
+    {
+      "name": "sd_clk_sep_logic",
+      "needs_decomposition": false,
+      "description": "Optional logic to generate a separate SD clock."
+    },
+    {
+      "name": "irq_enable_logic",
+      "needs_decomposition": false,
+      "description": "Optional logic to gate interrupt generation."
+    },
+    {
+      "name": "sdc_core_wrapper",
+      "needs_decomposition": false,
+      "description": "Wrapper around the SDC Core that exposes data_in/out and control signals."
+    }
+  ],
+  "reuse_decisions": [
+    {
+      "module": "wb_slave_if",
+      "ip_id": "WB_SLAVE_32_32",
+      "criteria": {
+        "function_match": true,
+        "interface_compatibility": true,
+        "configurability": "address/data width fixed to 32",
+        "verification_status": "verified",
+        "license": "BSD",
+        "synthesis_support": true,
+        "documentation_quality": "high"
+      },
+      "decision": "reuse"
+    },
+    {
+      "module": "wb_master_if",
+      "ip_id": "WB_MASTER_32_32",
+      "criteria": {
+        "function_match": true,
+        "interface_compatibility": true,
+        "configurability": "address/data width fixed to 32",
+        "verification_status": "verified",
+        "license": "BSD",
+        "synthesis_support": true,
+        "documentation_quality": "high"
+      },
+      "decision": "reuse"
+    },
+    {
+      "module": "cdc_fifo",
+      "ip_id": "CDC_FIFO_32_64",
+      "criteria": {
+        "function_match": true,
+        "interface_compatibility": true,
+        "configurability": "depth 64 words, data width 32",
+        "verification_status": "verified",
+        "license": "BSD",
+        "synthesis_support": true,
+        "documentation_quality": "medium"
+      },
+      "decision": "reuse"
+    },
+    {
+      "module": "clk_sync",
+      "ip_id": "CLK_SYNC_2FF",
+      "criteria": {
+        "function_match": true,
+        "interface_compatibility": true,
+        "configurability": "2‑FF synchronizer",
+        "verification_status": "verified",
+        "license": "BSD",
+        "synthesis_support": true,
+        "documentation_quality": "high"
+      },
+      "decision": "reuse"
+    },
+    {
+      "module": "sd_clk_sep_logic",
+      "ip_id": "SD_CLK_SEP",
+      "criteria": {
+        "function_match": true,
+        "interface_compatibility": true,
+        "configurability": "enable/disable via control register",
+        "verification_status": "verified",
+        "license": "BSD",
+        "synthesis_support": true,
+        "documentation_quality": "medium"
+      },
+      "decision": "reuse"
+    },
+    {
+      "module": "irq_enable_logic",
+      "ip_id": "IRQ_ENABLE",
+      "criteria": {
+        "function_match": true,
+        "interface_compatibility": true,
+        "configurability": "enable/disable via control register",
+        "verification_status": "verified",
+        "license": "BSD",
+        "synthesis_support": true,
+        "documentation_quality": "medium"
+      },
+      "decision": "reuse"
+    },
+    {
+      "module": "sdc_core_wrapper",
+      "ip_id": null,
+      "criteria": {
+        "function_match": false,
+        "interface_compatibility": false,
+        "configurability": false,
+        "verification_status": false,
+        "license": false,
+        "synthesis_support": false,
+        "documentation_quality": false
+      },
+      "decision": "new_rtl_required",
+      "reason": "The SDC Core is proprietary and not available in the catalog."
+    }
+  ],
+  "integration_plan": [
+    {
+      "pair": [
+        "sdc_controller",
+        "wb_slave_if"
+      ],
+      "connection": {
+        "sdc_controller.wb_slave_*": "wb_slave_if.*"
+      },
+      "compatibility_check": "passed"
+    },
+    {
+      "pair": [
+        "sdc_controller",
+        "wb_master_if"
+      ],
+      "connection": {
+        "sdc_controller.wb_master_*": "wb_master_if.*"
+      },
+      "compatibility_check": "passed"
+    },
+    {
+      "pair": [
+        "sdc_controller",
+        "cdc_fifo"
+      ],
+      "connection": {
+        "sdc_controller.core_to_fifo_*": "cdc_fifo.*",
+        "sdc_controller.fifo_to_bus_*": "cdc_fifo.*"
+      },
+      "compatibility_check": "passed"
+    },
+    {
+      "pair": [
+        "sdc_controller",
+        "clk_sync"
+      ],
+      "connection": {
+        "sdc_controller.core_rst_sync": "clk_sync.in",
+        "sdc_controller.core_rst_sync_out": "clk_sync.out"
+      },
+      "compatibility_check": "passed"
+    },
+    {
+      "pair": [
+        "sdc_controller",
+        "sd_clk_sep_logic"
+      ],
+      "connection": {
+        "sdc_controller.sd_clk_en": "sd_clk_sep_logic.en",
+        "sdc_controller.sd_clk_o": "sd_clk_sep_logic.out"
+      },
+      "compatibility_check": "passed"
+    },
+    {
+      "pair": [
+        "sdc_controller",
+        "irq_enable_logic"
+      ],
+      "connection": {
+        "sdc_controller.irq_en_i": "irq_enable_logic.en",
+        "sdc_controller.irq_o": "irq_enable_logic.out"
+      },
+      "compatibility_check": "passed"
+    },
+    {
+      "pair": [
+        "sdc_controller",
+        "sdc_core_wrapper"
+      ],
+      "connection": {
+        "sdc_controller.core_*": "sdc_core_wrapper.*"
+      },
+      "compatibility_check": "passed"
+    }
+  ],
+  "verification_plan": {
+    "simulation": {
+      "environment": "UVM",
+      "testbenches": [
+        "tb_sdc_controller_top.sv",
+        "tb_sdc_core_wrapper.sv"
+      ],
+      "stimuli": [
+        "Wishbone bus traffic generator",
+        "Clock domain crossing stress test",
+        "SD_CLK_SEP enable/disable toggling",
+        "IRQ enable gating"
+      ],
+      "coverage": {
+        "functional": true,
+        "code": true,
+        "interface": true
+      }
+    },
+    "synthesis": {
+      "tool": "Synopsys Design Compiler",
+      "constraints": [
+        "max_frequency 100MHz",
+        "area 5kGE"
+      ],
+      "reporting": [
+        "timing_summary.rpt",
+        "area_report.rpt"
+      ]
+    },
+    "formal": {
+      "properties": [
+        "No bus transaction stalls > 5 cycles",
+        "CDC FIFO depth never underflows/overflows",
+        "SD_CLK_SEP toggles only when enabled",
+        "IRQ only asserted when enabled and core asserts"
+      ],
+      "tool": "Cadence JasperGold"
+    }
+  },
+  "debug_plan": {
+    "waveform_analysis": [
+      "wb_slave_if",
+      "wb_master_if",
+      "cdc_fifo",
+      "clk_sync",
+      "sd_clk_sep_logic",
+      "irq_enable_logic",
+      "sdc_core_wrapper"
+    ],
+    "assertions": [
+      "assert property (posedge wb_clk_i) disable iff (wb_rst_i) (wb_stb_i && wb_cyc_i) |-> wb_ack_o;",
+      "assert property (posedge sdc_clk_i) disable iff (sdc_rst_i) (fifo_write_en) |-> !fifo_full;",
+      "assert property (posedge wb_clk_i) disable iff (wb_rst_i) (fifo_read_en) |-> !fifo_empty;"
+    ],
+    "coverage_points": [
+      "wb_slave_if: register write/read",
+      "wb_master_if: burst transfer",
+      "cdc_fifo: depth usage",
+      "sd_clk_sep_logic: enable/disable transitions",
+      "irq_enable_logic: gating behavior"
+    ],
+    "debug_probes": [
+      "core_status",
+      "fifo_status",
+      "sd_clk_state",
+      "irq_state"
+    ]
+  },
+  "unresolved_assumptions": [
+    "Exact timing of the SDC Core's data ready signal relative to its clock domain.",
+    "Maximum burst length supported by the Wishbone master interface.",
+    "Whether the SD_CLK_SEP must be phase‑aligned with the core clock.",
+    "The width of the interrupt vector (assumed 1‑bit)."
+  ]
+}

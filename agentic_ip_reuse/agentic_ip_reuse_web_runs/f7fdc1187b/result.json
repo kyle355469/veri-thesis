@@ -1,0 +1,626 @@
+{
+  "requirements": {
+    "functionality": [
+      "Provide a Wishbone slave interface for configuration registers and BD access.",
+      "Provide a Wishbone master interface for DMA transfers to/from external memory.",
+      "Implement SD/MMC command and data path with CRC, interrupt, and status handling.",
+      "Support buffer descriptor (BD) management for Tx and Rx.",
+      "Provide dual‑clock FIFOs for Tx and Rx data transfer.",
+      "Provide a clock divider for SD card clock generation.",
+      "Support optional SD_CLK_SEP and SDC_IRQ_ENABLE configurations."
+    ],
+    "performance_target": {
+      "wishbone_burst_length": 4,
+      "max_dma_transfer_rate": ">= 50 MB/s (depends on system clock)",
+      "command_latency": "< 10 µs from write to cmd_out",
+      "interrupt_latency": "< 5 µs"
+    },
+    "io_interface": {
+      "wishbone_slave": {
+        "clk": "wb_clk_i",
+        "rst": "wb_rst_i",
+        "dat_i": "wb_dat_i",
+        "dat_o": "wb_dat_o",
+        "adr_i": "wb_adr_i",
+        "sel_i": "wb_sel_i",
+        "we_i": "wb_we_i",
+        "cyc_i": "wb_cyc_i",
+        "stb_i": "wb_stb_i",
+        "ack_o": "wb_ack_o"
+      },
+      "wishbone_master": {
+        "adr_o": "m_wb_adr_o",
+        "sel_o": "m_wb_sel_o",
+        "we_o": "m_wb_we_o",
+        "dat_o": "m_wb_dat_o",
+        "dat_i": "m_wb_dat_i",
+        "cyc_o": "m_wb_cyc_o",
+        "stb_o": "m_wb_stb_o",
+        "cti_o": "m_wb_cti_o",
+        "bte_o": "m_wb_bte_o",
+        "ack_i": "m_wb_ack_i"
+      },
+      "sd_io": {
+        "cmd_dat_i": "sd_cmd_dat_i",
+        "cmd_out_o": "sd_cmd_out_o",
+        "cmd_oe_o": "sd_cmd_oe_o",
+        "dat_dat_i": "sd_dat_dat_i",
+        "dat_out_o": "sd_dat_out_o",
+        "dat_oe_o": "sd_dat_oe_o",
+        "clk_o_pad": "sd_clk_o_pad",
+        "clk_i_pad": "sd_clk_i_pad",
+        "int_a": "int_a",
+        "int_b": "int_b",
+        "int_c": "int_c",
+        "card_detect": "card_detect"
+      },
+      "optional_io": {
+        "sd_clk_i_pad": "sd_clk_i_pad",
+        "int_a_ext": "int_a",
+        "int_b_ext": "int_b",
+        "int_c_ext": "int_c"
+      }
+    },
+    "ppa_constraints": {
+      "area": "< 200 kGE",
+      "power": "< 1 W (dynamic)",
+      "timing": "setup/hold < 200 ps, max clock 200 MHz"
+    }
+  },
+  "modules": [
+    {
+      "name": "sdc_controller",
+      "type": "top",
+      "submodules": [
+        "sd_controller_wb",
+        "sd_cmd_master",
+        "sd_data_master",
+        "sd_cmd_serial_host",
+        "sd_data_serial_host",
+        "sd_bd_tx",
+        "sd_bd_rx",
+        "sd_fifo_tx_filler",
+        "sd_fifo_rx_filler",
+        "sd_clock_divider",
+        "sd_crc_16",
+        "sd_crc_7"
+      ],
+      "needs_decomposition": true,
+      "sub_spec": "Top‑level module that wires all sub‑blocks together, handles clock domain crossing, and implements the optional SD_CLK_SEP and SDC_IRQ_ENABLE logic."
+    },
+    {
+      "name": "sd_controller_wb",
+      "type": "wishbone_slave",
+      "needs_decomposition": false,
+      "sub_spec": "Registers, BD write enable logic, interrupt status, and command interface signals."
+    },
+    {
+      "name": "sd_cmd_master",
+      "type": "command_logic",
+      "needs_decomposition": false,
+      "sub_spec": "FSM for command sequencing, CRC/Index checking, and status register updates."
+    },
+    {
+      "name": "sd_data_master",
+      "type": "data_path",
+      "needs_decomposition": false,
+      "sub_spec": "FSM for BD handling, DMA initiation, FIFO status monitoring, and interrupt generation."
+    },
+    {
+      "name": "sd_cmd_serial_host",
+      "type": "serial_interface",
+      "needs_decomposition": false,
+      "sub_spec": "Physical command line driver with start/stop bits, CRC, and status reporting."
+    },
+    {
+      "name": "sd_data_serial_host",
+      "type": "serial_interface",
+      "needs_decomposition": false,
+      "sub_spec": "Bidirectional data bus driver with CRC‑16, start/stop bits, and busy signalling."
+    },
+    {
+      "name": "sd_bd_tx",
+      "type": "bd",
+      "needs_decomposition": false,
+      "sub_spec": "Circular buffer of Tx BDs, write/read pointers, free counter."
+    },
+    {
+      "name": "sd_bd_rx",
+      "type": "bd",
+      "needs_decomposition": false,
+      "sub_spec": "Circular buffer of Rx BDs, write/read pointers, free counter."
+    },
+    {
+      "name": "sd_fifo_tx_filler",
+      "type": "fifo",
+      "needs_decomposition": false,
+      "sub_spec": "Dual‑clock FIFO for Tx data, Wishbone master interface for DMA."
+    },
+    {
+      "name": "sd_fifo_rx_filler",
+      "type": "fifo",
+      "needs_decomposition": false,
+      "sub_spec": "Dual‑clock FIFO for Rx data, Wishbone master interface for DMA."
+    },
+    {
+      "name": "sd_clock_divider",
+      "type": "clock_divider",
+      "needs_decomposition": false,
+      "sub_spec": "8‑bit programmable divider, asynchronous reset."
+    },
+    {
+      "name": "sd_crc_16",
+      "type": "crc",
+      "needs_decomposition": false,
+      "sub_spec": "16‑bit LFSR CRC generator for data path."
+    },
+    {
+      "name": "sd_crc_7",
+      "type": "crc",
+      "needs_decomposition": false,
+      "sub_spec": "7‑bit LFSR CRC generator for command path."
+    }
+  ],
+  "reuse_decisions": [
+    {
+      "module": "sd_controller_wb",
+      "reuse_ip": "wishbone_slave_register_block",
+      "criteria": {
+        "function_match": true,
+        "interface_compatibility": true,
+        "configurability": true,
+        "verification_status": true,
+        "license": "BSD",
+        "synthesis_support": true,
+        "documentation_quality": "high"
+      },
+      "notes": "All register addresses and widths match the spec; only BD write enable logic is added."
+    },
+    {
+      "module": "sd_fifo_tx_filler",
+      "reuse_ip": "dual_clock_fifo_32bit",
+      "criteria": {
+        "function_match": true,
+        "interface_compatibility": true,
+        "configurability": true,
+        "verification_status": true,
+        "license": "MIT",
+        "synthesis_support": true,
+        "documentation_quality": "high"
+      },
+      "notes": "FIFO depth is parameterized to support FIFO_TX_MEM_DEPTH from sd_defines.v."
+    },
+    {
+      "module": "sd_fifo_rx_filler",
+      "reuse_ip": "dual_clock_fifo_32bit",
+      "criteria": {
+        "function_match": true,
+        "interface_compatibility": true,
+        "configurability": true,
+        "verification_status": true,
+        "license": "MIT",
+        "synthesis_support": true,
+        "documentation_quality": "high"
+      },
+      "notes": "Same depth as Tx FIFO; only read/write enable logic differs."
+    },
+    {
+      "module": "sd_clock_divider",
+      "reuse_ip": "programmable_clock_divider",
+      "criteria": {
+        "function_match": true,
+        "interface_compatibility": true,
+        "configurability": true,
+        "verification_status": true,
+        "license": "Apache-2.0",
+        "synthesis_support": true,
+        "documentation_quality": "high"
+      },
+      "notes": "8‑bit divider value matches spec; asynchronous reset is supported."
+    },
+    {
+      "module": "sd_crc_16",
+      "reuse_ip": "lfsr_crc_16",
+      "criteria": {
+        "function_match": true,
+        "interface_compatibility": true,
+        "configurability": false,
+        "verification_status": true,
+        "license": "BSD",
+        "synthesis_support": true,
+        "documentation_quality": "high"
+      },
+      "notes": "Direct mapping of the spec; no parameterization needed."
+    },
+    {
+      "module": "sd_crc_7",
+      "reuse_ip": "lfsr_crc_7",
+      "criteria": {
+        "function_match": true,
+        "interface_compatibility": true,
+        "configurability": false,
+        "verification_status": true,
+        "license": "BSD",
+        "synthesis_support": true,
+        "documentation_quality": "high"
+      },
+      "notes": "Direct mapping of the spec; no parameterization needed."
+    },
+    {
+      "module": "sd_bd_tx",
+      "reuse_ip": null,
+      "criteria": {
+        "function_match": false,
+        "interface_compatibility": false,
+        "configurability": false,
+        "verification_status": false,
+        "license": null,
+        "synthesis_support": false,
+        "documentation_quality": null
+      },
+      "notes": "No existing IP matches the BD circular buffer with 16‑bit width and dual‑write support; new RTL required."
+    },
+    {
+      "module": "sd_bd_rx",
+      "reuse_ip": null,
+      "criteria": {
+        "function_match": false,
+        "interface_compatibility": false,
+        "configurability": false,
+        "verification_status": false,
+        "license": null,
+        "synthesis_support": false,
+        "documentation_quality": null
+      },
+      "notes": "Same as Tx BD; new RTL required."
+    },
+    {
+      "module": "sd_cmd_master",
+      "reuse_ip": null,
+      "criteria": {
+        "function_match": false,
+        "interface_compatibility": false,
+        "configurability": false,
+        "verification_status": false,
+        "license": null,
+        "synthesis_support": false,
+        "documentation_quality": null
+      },
+      "notes": "Complex FSM with CRC/Index checking; new RTL required."
+    },
+    {
+      "module": "sd_data_master",
+      "reuse_ip": null,
+      "criteria": {
+        "function_match": false,
+        "interface_compatibility": false,
+        "configurability": false,
+        "verification_status": false,
+        "license": null,
+        "synthesis_support": false,
+        "documentation_quality": null
+      },
+      "notes": "Complex FSM for BD handling and DMA; new RTL required."
+    },
+    {
+      "module": "sd_cmd_serial_host",
+      "reuse_ip": null,
+      "criteria": {
+        "function_match": false,
+        "interface_compatibility": false,
+        "configurability": false,
+        "verification_status": false,
+        "license": null,
+        "synthesis_support": false,
+        "documentation_quality": null
+      },
+      "notes": "Physical command line driver; new RTL required."
+    },
+    {
+      "module": "sd_data_serial_host",
+      "reuse_ip": null,
+      "criteria": {
+        "function_match": false,
+        "interface_compatibility": false,
+        "configurability": false,
+        "verification_status": false,
+        "license": null,
+        "synthesis_support": false,
+        "documentation_quality": null
+      },
+      "notes": "Bidirectional data bus driver with CRC‑16; new RTL required."
+    }
+  ],
+  "integration_plan": {
+    "clock_domains": [
+      {
+        "name": "system_clk",
+        "sources": [
+          "wb_clk_i",
+          "sd_clk_i_pad (if SDC_CLK_SEP)"
+        ],
+        "description": "Primary clock for Wishbone, BD logic, and FIFO control."
+      },
+      {
+        "name": "sd_clk",
+        "sources": [
+          "sd_clock_divider.SD_CLK"
+        ],
+        "description": "Clock driving the SD command and data physical interfaces."
+      }
+    ],
+    "wishbone_slave": {
+      "module": "sd_controller_wb",
+      "connections": {
+        "wb_clk_i": "wb_clk_i",
+        "wb_rst_i": "wb_rst_i",
+        "wb_dat_i": "wb_dat_i",
+        "wb_dat_o": "wb_dat_o",
+        "wb_adr_i": "wb_adr_i",
+        "wb_sel_i": "wb_sel_i",
+        "wb_we_i": "wb_we_i",
+        "wb_cyc_i": "wb_cyc_i",
+        "wb_stb_i": "wb_stb_i",
+        "wb_ack_o": "wb_ack_o",
+        "we_m_tx_bd": "we_m_tx_bd",
+        "we_m_rx_bd": "we_m_rx_bd",
+        "new_cmd": "new_cmd",
+        "we_ack": "we_ack",
+        "int_ack": "int_ack",
+        "cmd_int_busy": "cmd_int_busy",
+        "int_busy": "int_busy",
+        "write_req_s": "write_req_s",
+        "cmd_set_s": "cmd_set_s",
+        "cmd_arg_s": "cmd_arg_s",
+        "argument_reg": "argument_reg",
+        "cmd_setting_reg": "cmd_setting_reg",
+        "status_reg": "status_reg",
+        "cmd_resp_1": "cmd_resp_1",
+        "software_reset_reg": "software_reset_reg",
+        "time_out_reg": "time_out_reg",
+        "normal_int_status_reg": "normal_int_status_reg",
+        "error_int_status_reg": "error_int_status_reg",
+        "normal_int_signal_enable_reg": "normal_int_signal_enable_reg",
+        "error_int_signal_enable_reg": "error_int_signal_enable_reg",
+        "clock_divider": "clock_divider",
+        "Bd_Status_reg": "Bd_Status_reg",
+        "Bd_isr_reg": "Bd_isr_reg",
+        "Bd_isr_enable_reg": "Bd_isr_enable_reg",
+        "bd_isr_reset": "bd_isr_reset",
+        "normal_isr_reset": "normal_isr_reset",
+        "error_isr_reset": "error_isr_reset",
+        "dat_in_m_tx_bd": "dat_in_m_tx_bd",
+        "dat_in_m_rx_bd": "dat_in_m_rx_bd"
+      }
+    },
+    "wishbone_master": {
+      "module": "sd_data_master",
+      "connections": {
+        "m_wb_adr_o": "m_wb_adr_o",
+        "m_wb_sel_o": "m_wb_sel_o",
+        "m_wb_we_o": "m_wb_we_o",
+        "m_wb_dat_o": "m_wb_dat_o",
+        "m_wb_dat_i": "m_wb_dat_i",
+        "m_wb_cyc_o": "m_wb_cyc_o",
+        "m_wb_stb_o": "m_wb_stb_o",
+        "m_wb_cti_o": "m_wb_cti_o",
+        "m_wb_bte_o": "m_wb_bte_o",
+        "m_wb_ack_i": "m_wb_ack_i"
+      }
+    },
+    "command_path": {
+      "sd_cmd_master": {
+        "clk_pad_io": "sd_clk",
+        "rst_pad_i": "sd_rst",
+        "new_cmd": "new_cmd",
+        "data_write": "data_write",
+        "data_read": "data_read",
+        "arg_reg": "argument_reg",
+        "cmd_set_reg": "cmd_setting_reg",
+        "timeout_reg": "time_out_reg",
+        "status_reg": "status_reg",
+        "resp_1_reg": "cmd_resp_1",
+        "err_int_rst": "err_int_rst",
+        "normal_int_rst": "normal_int_rst",
+        "settings": "settings",
+        "go_idle_o": "go_idle_o",
+        "cmd_out": "cmd_out",
+        "req_out": "req_out",
+        "ack_out": "ack_out",
+        "req_in": "req_in",
+        "ack_in": "ack_in",
+        "cmd_in": "cmd_in",
+        "serial_status": "serial_status",
+        "card_detect": "card_detect"
+      },
+      "sd_cmd_serial_host": {
+        "SD_CLK_IN": "sd_clk",
+        "RST_IN": "sd_rst",
+        "SETTING_IN": "settings",
+        "CMD_IN": "cmd_out",
+        "REQ_IN": "req_out",
+        "ACK_IN": "ack_out",
+        "cmd_dat_i": "cmd_dat_i",
+        "CMD_OUT": "cmd_dat_o",
+        "ACK_OUT": "ack_out",
+        "REQ_OUT": "req_out",
+        "STATUS": "status",
+        "cmd_oe_o": "cmd_oe_o",
+        "cmd_out_o": "cmd_out_o",
+        "st_dat_t": "st_dat_t"
+      }
+    },
+    "data_path": {
+      "sd_data_master": {
+        "clk": "wb_clk_i",
+        "rst": "wb_rst_i",
+        "dat_in_tx": "dat_in_m_tx_bd",
+        "free_tx_bd": "free_tx_bd",
+        "ack_i_s_tx": "ack_i_s_tx",
+        "dat_in_rx": "dat_in_m_rx_bd",
+        "free_rx_bd": "free_rx_bd",
+        "ack_i_s_rx": "ack_i_s_rx",
+        "cmd_busy": "cmd_busy",
+        "we_ack": "we_ack",
+        "cmd_tsf_err": "cmd_tsf_err",
+        "card_status": "card_status",
+        "tx_empt": "tx_empt",
+        "tx_full": "tx_full",
+        "rx_full": "rx_full",
+        "busy_n": "busy_n",
+        "transm_complete": "transm_complete",
+        "crc_ok": "crc_ok",
+        "Dat_Int_Status_rst": "Dat_Int_Status_rst",
+        "transfer_type": "transfer_type",
+        "re_s_tx": "re_s_tx",
+        "a_cmp_tx": "a_cmp_tx",
+        "re_s_rx": "re_s_rx",
+        "a_cmp_rx": "a_cmp_rx",
+        "we_req": "we_req",
+        "d_write": "d_write",
+        "d_read": "d_read",
+        "cmd_arg": "cmd_arg",
+        "cmd_set": "cmd_set",
+        "start_tx_fifo": "start_tx_fifo",
+        "start_rx_fifo": "start_rx_fifo",
+        "sys_adr": "sys_adr",
+        "ack_transfer": "ack_transfer",
+        "Dat_Int_Status": "Dat_Int_Status",
+        "CIDAT": "CIDAT"
+      },
+      "sd_fifo_tx_filler": {
+        "clk": "wb_clk_i",
+        "rst": "wb_rst_i",
+        "m_wb_adr_o": "m_wb_adr_o",
+        "m_wb_we_o": "m_wb_we_o",
+        "m_wb_dat_i": "m_wb_dat_i",
+        "m_wb_cyc_o": "m_wb_cyc_o",
+        "m_wb_stb_o": "m_wb_stb_o",
+        "m_wb_ack_i": "m_wb_ack_i",
+        "m_wb_cti_o": "m_wb_cti_o",
+        "m_wb_bte_o": "m_wb_bte_o",
+        "en": "start_tx_fifo",
+        "adr": "sys_adr",
+        "sd_clk": "sd_clk",
+        "dat_o": "dat_o",
+        "rd": "rd",
+        "empty": "empty",
+        "fe": "fe"
+      },
+      "sd_fifo_rx_filler": {
+        "clk": "wb_clk_i",
+        "rst": "wb_rst_i",
+        "m_wb_adr_o": "m_wb_adr_o",
+        "m_wb_we_o": "m_wb_we_o",
+        "m_wb_dat_o": "m_wb_dat_o",
+        "m_wb_cyc_o": "m_wb_cyc_o",
+        "m_wb_stb_o": "m_wb_stb_o",
+        "m_wb_ack_i": "m_wb_ack_i",
+        "m_wb_cti_o": "m_wb_cti_o",
+        "m_wb_bte_o": "m_wb_bte_o",
+        "en": "start_rx_fifo",
+        "adr": "sys_adr",
+        "sd_clk": "sd_clk",
+        "dat_i": "dat_i",
+        "wr": "wr",
+        "full": "full"
+      }
+    },
+    "bd_logic": {
+      "sd_bd_tx": {
+        "clk": "wb_clk_i",
+        "rst": "wb_rst_i",
+        "we_m": "we_m_tx_bd",
+        "dat_in_m": "dat_in_m_tx_bd",
+        "free_bd": "free_tx_bd",
+        "re_s": "re_s_tx",
+        "ack_o_s": "ack_o_s_tx",
+        "a_cmp": "a_cmp_tx",
+        "dat_out_s": "dat_out_s_tx"
+      },
+      "sd_bd_rx": {
+        "clk": "wb_clk_i",
+        "rst": "wb_rst_i",
+        "we_m": "we_m_rx_bd",
+        "dat_in_m": "dat_in_m_rx_bd",
+        "free_bd": "free_rx_bd",
+        "re_s": "re_s_rx",
+        "ack_o_s": "ack_o_s_rx",
+        "a_cmp": "a_cmp_rx",
+        "dat_out_s": "dat_out_s_rx"
+      }
+    },
+    "clock_divider": {
+      "sd_clock_divider": {
+        "CLK": "wb_clk_i",
+        "DIVIDER": "clock_divider",
+        "RST": "wb_rst_i",
+        "SD_CLK": "sd_clk"
+      }
+    },
+    "interrupts": {
+      "int_a": "int_a",
+      "int_b": "int_b",
+      "int_c": "int_c",
+      "int_a_ext": "int_a",
+      "int_b_ext": "int_b",
+      "int_c_ext": "int_c"
+    }
+  },
+  "verification_plan": {
+    "simulation": [
+      "Create a top‑level testbench that instantiates sdc_controller.",
+      "Generate Wishbone stimulus for register writes/reads and BD writes.",
+      "Stimulate SD card interface using a virtual SD card model (command and data streams).",
+      "Verify interrupt generation logic by asserting status bits.",
+      "Coverage: register write/read, BD write/read, command sequence, data transfer, CRC errors."
+    ],
+    "synthesis": [
+      "Run synthesis on a target FPGA (e.g., Xilinx Artix‑7) with 200 MHz clock.",
+      "Check area, timing, and power reports.",
+      "Verify that all reused IPs are mapped to vendor IP cores."
+    ],
+    "formal": [
+      "Use property checking for Wishbone handshake (ack_o only after stb_i & cyc_i).",
+      "Assert that BD free counter never underflows.",
+      "Assert that CRC outputs match expected values for known patterns."
+    ],
+    "static_analysis": [
+      "Lint SystemVerilog with Synopsys VCS or Questa.",
+      "Check for uninitialized variables, race conditions, and metastability."
+    ]
+  },
+  "debug_plan": {
+    "waveform_probes": [
+      "wb_cyc_i, wb_stb_i, wb_ack_o, wb_dat_o, wb_dat_i",
+      "m_wb_cyc_o, m_wb_stb_o, m_wb_ack_i, m_wb_dat_o, m_wb_dat_i",
+      "cmd_out, cmd_in, cmd_dat_i, cmd_dat_o, cmd_oe_o",
+      "sd_dat_dat_i, sd_dat_out_o, sd_dat_oe_o",
+      "dat_in_m_tx_bd, dat_in_m_rx_bd, free_tx_bd, free_rx_bd",
+      "start_tx_fifo, start_rx_fifo, ack_transfer, transm_complete",
+      "crc_ok, crc_in, crc_out",
+      "int_a, int_b, int_c"
+    ],
+    "assertions": [
+      "Wishbone handshake: assert wb_ack_o only when wb_cyc_i & wb_stb_i.",
+      "BD counter: free_bd <= BD_SIZE.",
+      "CRC: crc_out matches expected for test vectors.",
+      "Interrupt: int_a asserted only when normal_int_status_reg & normal_int_signal_enable_reg.",
+      "Clock domain crossing: no metastability detected on req/ack signals."
+    ],
+    "coverage": [
+      "Register address coverage (all 0x00‑0x80 addresses).",
+      "BD write/read sequences.",
+      "Command FSM state coverage.",
+      "Data path FIFO full/empty transitions."
+    ]
+  },
+  "unresolved_assumptions": [
+    "The SD card interface timing (setup/hold) is compatible with the chosen sd_clk frequency.",
+    "The SD_BUS_W is fixed to 4 bits; no support for 1‑bit mode is implemented.",
+    "The Wishbone master burst type (CTI/BTE) is always 0 (single transfer).",
+    "The asynchronous reset of sd_clock_divider is active‑high and does not require a synchronous de‑assertion.",
+    "The BD_SIZE is a power of two (<= 256) to simplify pointer wrap‑around logic.",
+    "The external SD card model used in simulation correctly implements the SD protocol timing and CRC checks."
+  ]
+}

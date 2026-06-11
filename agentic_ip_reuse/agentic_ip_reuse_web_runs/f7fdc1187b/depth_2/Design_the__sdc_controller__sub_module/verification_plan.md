@@ -1,0 +1,7 @@
+# Verification, Synthesis, and Debug Plan
+
+## Verification
+- {'simulation': {'testbench': 'sdc_controller_tb.sv', 'stimuli': ['Wishbone configuration writes to set SD_CLK_SEP_EN', 'Wishbone read/write to SD data registers', 'Clock domain crossing stimulus with jitter', 'IRQ generation verification'], 'coverage': {'functional': 'All Wishbone transactions, SDIO command sequences, IRQ events', 'assertions': 'Handshake, FIFO full/empty, clock sync metastability'}}, 'synthesis': {'tool': 'Xilinx Vivado 2024.1', 'constraints': 'Timing constraints for wb_clk and sd_clk', 'report': 'area, power, timing slack'}, 'formal': {'properties': ['No data loss in CDC FIFO', 'Wishbone handshake compliance', 'SDIO protocol compliance'], 'tool': 'Synopsys VCS Formal'}}
+
+## Debug
+- {'waveform_monitoring': ['wb_slave_if.wb_cyc, wb_slave_if.wb_stb, wb_slave_if.wb_we', 'cdc_fifo.wb_full, cdc_fifo.wb_empty', 'clk_sync.rst_n, clk_sync.sync_out', 'sd_clk_sep_logic.sd_clk_out', 'sdc_core_wrapper.sd_cmd, sdc_core_wrapper.sd_dat', 'irq_enable_logic.irq_out'], 'assertions': ['assert property (@(posedge wb_clk) wb_slave_if.wb_cyc |-> wb_slave_if.wb_ack);', 'assert property (@(posedge sd_clk) sdc_core_wrapper.sd_cmd_valid |-> sdc_core_wrapper.sd_cmd_ready);', 'assert property (@(posedge wb_clk) cdc_fifo.wb_full |-> !cdc_fifo.wb_we);'], 'debug_signals': ['cdc_fifo.wb_wr_ptr, cdc_fifo.wb_rd_ptr', 'clk_sync.sync_stage[1:0]']}

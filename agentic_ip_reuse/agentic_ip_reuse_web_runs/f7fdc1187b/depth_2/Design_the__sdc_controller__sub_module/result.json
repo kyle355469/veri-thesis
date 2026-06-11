@@ -1,0 +1,341 @@
+{
+  "requirements": {
+    "functionality": "Top‑level module that wires all sub‑blocks together, handles clock‑domain crossing, and implements the optional SD_CLK_SEP logic. It must expose a Wishbone slave interface for configuration, a Wishbone master interface for data transfer, SDIO signals (clk, cmd, dat[3:0]), and an IRQ output.",
+    "performance": {
+      "wishbone_clk": "≤ 100 MHz",
+      "sd_clk": "≤ 48 MHz (max)",
+      "cdc_fifo_depth": "≥ 64 words (configurable)",
+      "latency": "≤ 10 cycles from Wishbone write to SDIO data output"
+    },
+    "I/O_interface": {
+      "wishbone_slave": {
+        "data_width": 32,
+        "addr_width": 16,
+        "reset_active": "low"
+      },
+      "wishbone_master": {
+        "data_width": 32,
+        "addr_width": 16,
+        "reset_active": "low"
+      },
+      "sdio": {
+        "clk": "output",
+        "cmd": "bidirectional",
+        "dat": "bidirectional[3:0]"
+      },
+      "irq": "output"
+    },
+    "PPA_constraints": {
+      "area": "≤ 5 kLUT",
+      "power": "≤ 50 mW (typical 100 MHz)",
+      "timing_margin": "≥ 1 ns"
+    }
+  },
+  "modules": [
+    {
+      "name": "wb_slave_if",
+      "type": "Wishbone Slave Interface",
+      "parameters": {
+        "DATA_WIDTH": 32,
+        "ADDR_WIDTH": 16
+      },
+      "needs_decomposition": false
+    },
+    {
+      "name": "wb_master_if",
+      "type": "Wishbone Master Interface",
+      "parameters": {
+        "DATA_WIDTH": 32,
+        "ADDR_WIDTH": 16
+      },
+      "needs_decomposition": false
+    },
+    {
+      "name": "cdc_fifo",
+      "type": "Clock‑Domain Crossing FIFO",
+      "parameters": {
+        "DATA_WIDTH": 32,
+        "DEPTH": 64
+      },
+      "needs_decomposition": false
+    },
+    {
+      "name": "clk_sync",
+      "type": "Clock Synchronizer",
+      "parameters": {
+        "SYNC_STAGES": 2
+      },
+      "needs_decomposition": false
+    },
+    {
+      "name": "sd_clk_sep_logic",
+      "type": "Optional SD Clock Separation Logic",
+      "parameters": {
+        "ENABLE": "parameter"
+      },
+      "needs_decomposition": false
+    },
+    {
+      "name": "irq_enable_logic",
+      "type": "IRQ Generation Logic",
+      "parameters": {
+        "POLARITY": "active_high"
+      },
+      "needs_decomposition": false
+    },
+    {
+      "name": "sdc_core_wrapper",
+      "type": "SD Controller Core Wrapper",
+      "parameters": {
+        "DATA_WIDTH": 32,
+        "CMD_WIDTH": 6,
+        "DAT_WIDTH": 4
+      },
+      "needs_decomposition": false
+    }
+  ],
+  "reuse_decisions": [
+    {
+      "module": "wb_slave_if",
+      "ip_id": "WB_SLAVE_32_16",
+      "status": "reuse",
+      "criteria_met": [
+        "function_match",
+        "interface_compatibility",
+        "configurability",
+        "verified",
+        "synthesis_support",
+        "documentation"
+      ]
+    },
+    {
+      "module": "wb_master_if",
+      "ip_id": "WB_MASTER_32_16",
+      "status": "reuse",
+      "criteria_met": [
+        "function_match",
+        "interface_compatibility",
+        "configurability",
+        "verified",
+        "synthesis_support",
+        "documentation"
+      ]
+    },
+    {
+      "module": "cdc_fifo",
+      "ip_id": "CDC_FIFO_32_64",
+      "status": "reuse",
+      "criteria_met": [
+        "function_match",
+        "interface_compatibility",
+        "configurability",
+        "verified",
+        "synthesis_support",
+        "documentation"
+      ]
+    },
+    {
+      "module": "clk_sync",
+      "ip_id": "CLK_SYNC_2STAGE",
+      "status": "reuse",
+      "criteria_met": [
+        "function_match",
+        "interface_compatibility",
+        "configurability",
+        "verified",
+        "synthesis_support",
+        "documentation"
+      ]
+    },
+    {
+      "module": "sd_clk_sep_logic",
+      "ip_id": null,
+      "status": "new_rtl_required",
+      "reason": "No existing IP provides optional SD clock separation with the required enable control."
+    },
+    {
+      "module": "irq_enable_logic",
+      "ip_id": "IRQ_GEN_ACTIVE_HIGH",
+      "status": "reuse",
+      "criteria_met": [
+        "function_match",
+        "interface_compatibility",
+        "configurability",
+        "verified",
+        "synthesis_support",
+        "documentation"
+      ]
+    },
+    {
+      "module": "sdc_core_wrapper",
+      "ip_id": null,
+      "status": "new_rtl_required",
+      "reason": "Custom wrapper needed to adapt the vendor SD core to the Wishbone interface and SDIO pins."
+    }
+  ],
+  "integration_plan": {
+    "clock_domains": {
+      "wishbone_clk": "wb_clk",
+      "sd_clk": "sd_clk",
+      "system_clk": "sys_clk"
+    },
+    "connections": [
+      {
+        "from": "wb_slave_if.wb_clk",
+        "to": "clk_sync.clk_in"
+      },
+      {
+        "from": "clk_sync.clk_out",
+        "to": "cdc_fifo.wb_clk"
+      },
+      {
+        "from": "cdc_fifo.wb_clk",
+        "to": "wb_master_if.wb_clk"
+      },
+      {
+        "from": "wb_slave_if.wb_rst_n",
+        "to": "clk_sync.rst_n"
+      },
+      {
+        "from": "clk_sync.rst_n",
+        "to": "cdc_fifo.rst_n"
+      },
+      {
+        "from": "cdc_fifo.rst_n",
+        "to": "wb_master_if.rst_n"
+      },
+      {
+        "from": "wb_slave_if.wb_dat_o",
+        "to": "cdc_fifo.wb_dat_o"
+      },
+      {
+        "from": "cdc_fifo.wb_dat_i",
+        "to": "wb_master_if.wb_dat_i"
+      },
+      {
+        "from": "wb_slave_if.wb_addr",
+        "to": "cdc_fifo.wb_addr"
+      },
+      {
+        "from": "cdc_fifo.wb_addr",
+        "to": "wb_master_if.wb_addr"
+      },
+      {
+        "from": "wb_slave_if.wb_we",
+        "to": "cdc_fifo.wb_we"
+      },
+      {
+        "from": "cdc_fifo.wb_we",
+        "to": "wb_master_if.wb_we"
+      },
+      {
+        "from": "wb_slave_if.wb_cyc",
+        "to": "cdc_fifo.wb_cyc"
+      },
+      {
+        "from": "cdc_fifo.wb_cyc",
+        "to": "wb_master_if.wb_cyc"
+      },
+      {
+        "from": "wb_slave_if.wb_stb",
+        "to": "cdc_fifo.wb_stb"
+      },
+      {
+        "from": "cdc_fifo.wb_stb",
+        "to": "wb_master_if.wb_stb"
+      },
+      {
+        "from": "wb_master_if.wb_ack",
+        "to": "cdc_fifo.wb_ack"
+      },
+      {
+        "from": "cdc_fifo.wb_ack",
+        "to": "wb_slave_if.wb_ack"
+      },
+      {
+        "from": "sd_clk_sep_logic.sd_clk_out",
+        "to": "sdc_core_wrapper.sd_clk"
+      },
+      {
+        "from": "sdc_core_wrapper.sd_cmd",
+        "to": "sdio.cmd"
+      },
+      {
+        "from": "sdc_core_wrapper.sd_dat",
+        "to": "sdio.dat"
+      },
+      {
+        "from": "sdc_core_wrapper.sd_clk",
+        "to": "sdio.clk"
+      },
+      {
+        "from": "sdc_core_wrapper.irq",
+        "to": "irq_enable_logic.irq_in"
+      },
+      {
+        "from": "irq_enable_logic.irq_out",
+        "to": "irq"
+      }
+    ],
+    "parameter_mapping": {
+      "sd_clk_sep_logic.ENABLE": "parameter SD_CLK_SEP_EN",
+      "sdc_core_wrapper.DATA_WIDTH": 32,
+      "sdc_core_wrapper.CMD_WIDTH": 6,
+      "sdc_core_wrapper.DAT_WIDTH": 4
+    }
+  },
+  "verification_plan": {
+    "simulation": {
+      "testbench": "sdc_controller_tb.sv",
+      "stimuli": [
+        "Wishbone configuration writes to set SD_CLK_SEP_EN",
+        "Wishbone read/write to SD data registers",
+        "Clock domain crossing stimulus with jitter",
+        "IRQ generation verification"
+      ],
+      "coverage": {
+        "functional": "All Wishbone transactions, SDIO command sequences, IRQ events",
+        "assertions": "Handshake, FIFO full/empty, clock sync metastability"
+      }
+    },
+    "synthesis": {
+      "tool": "Xilinx Vivado 2024.1",
+      "constraints": "Timing constraints for wb_clk and sd_clk",
+      "report": "area, power, timing slack"
+    },
+    "formal": {
+      "properties": [
+        "No data loss in CDC FIFO",
+        "Wishbone handshake compliance",
+        "SDIO protocol compliance"
+      ],
+      "tool": "Synopsys VCS Formal"
+    }
+  },
+  "debug_plan": {
+    "waveform_monitoring": [
+      "wb_slave_if.wb_cyc, wb_slave_if.wb_stb, wb_slave_if.wb_we",
+      "cdc_fifo.wb_full, cdc_fifo.wb_empty",
+      "clk_sync.rst_n, clk_sync.sync_out",
+      "sd_clk_sep_logic.sd_clk_out",
+      "sdc_core_wrapper.sd_cmd, sdc_core_wrapper.sd_dat",
+      "irq_enable_logic.irq_out"
+    ],
+    "assertions": [
+      "assert property (@(posedge wb_clk) wb_slave_if.wb_cyc |-> wb_slave_if.wb_ack);",
+      "assert property (@(posedge sd_clk) sdc_core_wrapper.sd_cmd_valid |-> sdc_core_wrapper.sd_cmd_ready);",
+      "assert property (@(posedge wb_clk) cdc_fifo.wb_full |-> !cdc_fifo.wb_we);"
+    ],
+    "debug_signals": [
+      "cdc_fifo.wb_wr_ptr, cdc_fifo.wb_rd_ptr",
+      "clk_sync.sync_stage[1:0]"
+    ]
+  },
+  "unresolved_assumptions": [
+    "Exact reset polarity and active‑low vs active‑high for all sub‑modules.",
+    "Whether SD_CLK_SEP logic must generate a separate clock for the SD core or simply gate the existing sd_clk.",
+    "Maximum acceptable jitter on the sd_clk after separation.",
+    "Whether the Wishbone master interface must support burst transfers or only single‑beat transactions.",
+    "The target FPGA family and its clock‑domain crossing IP library availability."
+  ]
+}

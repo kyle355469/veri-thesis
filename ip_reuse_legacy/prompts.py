@@ -2,12 +2,39 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional
 
 from rag_rtl.json_utils import json_default, preview_text
 
 from .constants import CRITERIA, MODULE_CATEGORIES
 from .types import IpCandidate, IpReusePlan, ModuleSpec, SystemRequirements
+
+
+def _generation_context_sections(
+    original_spec: Optional[str],
+    reuse_modules: Optional[Dict[str, str]],
+    environment_notes: Optional[Iterable[str]],
+) -> str:
+    sections: List[str] = []
+    if reuse_modules:
+        signatures = json.dumps(reuse_modules, indent=2, ensure_ascii=False)
+        sections.append(
+            "Provided reusable modules (each is supplied as a separate source file in the compile "
+            "environment; instantiate them using these exact module names and port declarations; "
+            "do NOT re-declare or re-implement any of them):\n"
+            f"{signatures}"
+        )
+    if environment_notes:
+        notes = "\n".join(f"- {note}" for note in environment_notes)
+        sections.append(f"Compile environment notes:\n{notes}")
+    if original_spec:
+        sections.append(
+            "Original design specification (authoritative for the top module name, exact port "
+            "names, directions, widths, parameters, reset polarity, and behavior — follow it "
+            "even where the plan disagrees):\n"
+            f"{original_spec}"
+        )
+    return ("\n\n".join(sections) + "\n\n") if sections else ""
 
 
 def build_requirements_prompt(prompt: str, target_hdl: str, constraints: Iterable[str]) -> str:
@@ -123,16 +150,26 @@ Return only JSON:
 }}"""
 
 
-def build_rtl_generation_prompt(plan: IpReusePlan, target_hdl: str, top_module: str | None) -> str:
+def build_rtl_generation_prompt(
+    plan: IpReusePlan,
+    target_hdl: str,
+    top_module: str | None,
+    *,
+    original_spec: Optional[str] = None,
+    reuse_modules: Optional[Dict[str, str]] = None,
+    environment_notes: Optional[Iterable[str]] = None,
+) -> str:
     plan_json = json.dumps(asdict(plan), default=json_default, indent=2)
     top = top_module or "choose a suitable top module name from the requirements"
+    context = _generation_context_sections(original_spec, reuse_modules, environment_notes)
     return f"""Generate integrated {target_hdl} RTL from this IP reuse plan.
 Use selected reusable IP behavior where appropriate, configure or adapt candidates as described, and create new RTL for modules marked new.
+Reused modules listed as provided source files must only be instantiated, never re-declared in your output.
 Return exactly one fenced {target_hdl} code block and no extra prose.
 
 Top module: {top}
 
-IP reuse plan:
+{context}IP reuse plan:
 {plan_json}"""
 
 
@@ -142,15 +179,21 @@ def build_repair_prompt(
     diagnostics: List[Dict[str, Any]],
     target_hdl: str,
     top_module: str | None,
+    *,
+    original_spec: Optional[str] = None,
+    reuse_modules: Optional[Dict[str, str]] = None,
+    environment_notes: Optional[Iterable[str]] = None,
 ) -> str:
     plan_json = json.dumps(asdict(plan), default=json_default, indent=2)
+    context = _generation_context_sections(original_spec, reuse_modules, environment_notes)
     return f"""Repair this integrated {target_hdl} RTL so it passes syntax and lint checks.
 Keep the same IP reuse intent and public top-level behavior.
+Reused modules listed as provided source files must only be instantiated, never re-declared in your output.
 Return exactly one fenced {target_hdl} code block and no extra prose.
 
 Top module: {top_module or "unknown"}
 
-IP reuse plan:
+{context}IP reuse plan:
 {plan_json}
 
 Diagnostics:

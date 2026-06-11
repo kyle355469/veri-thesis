@@ -1,0 +1,8 @@
+{
+  "depth": 0,
+  "prompt_preview": "# sdc_controller design specification\\n\\n\\n## Introduction\\n\\nThis module is the interface between the SDC Core and t...",
+  "modules": 5,
+  "steps": 3,
+  "stopped_reason": "final",
+  "children": {}
+}
