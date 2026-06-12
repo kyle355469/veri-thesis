@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -137,6 +138,164 @@ def port_contract(ports: Any) -> List[tuple[str, str, str]]:
         for port in ports
         if isinstance(port, dict)
     )
+
+
+def sanitize_manifest(manifest: Any) -> Any:
+    """Deterministically repair common model deviations before validation:
+    glob/wildcard port names (e.g. ``*_icb_cmd_valid``) become behavioral notes,
+    empty behavioral_requirements/width/description fields get filled, duplicate
+    ports and modules are dropped, and unknown or self dependencies are removed.
+    Structural problems (missing fields, missing instances) are left for the
+    LLM correction round."""
+    if not isinstance(manifest, dict):
+        return manifest
+    modules = [module for module in manifest.get("modules") or [] if isinstance(module, dict)]
+    seen_module_names: set[str] = set()
+    deduped_modules: List[Dict[str, Any]] = []
+    for module in modules:
+        name = str(module.get("name") or "")
+        if name and name in seen_module_names:
+            continue
+        seen_module_names.add(name)
+        deduped_modules.append(module)
+    if isinstance(manifest.get("modules"), list):
+        manifest["modules"] = deduped_modules
+
+    top = manifest.get("top_module")
+    owners = ([top] if isinstance(top, dict) else []) + deduped_modules
+    for owner in owners:
+        notes = _sanitize_ports(owner)
+        is_submodule = owner is not top
+        if is_submodule:
+            requirements = owner.get("behavioral_requirements")
+            if not isinstance(requirements, list):
+                requirements = []
+            requirements.extend(notes)
+            if not requirements:
+                fallback = str(owner.get("purpose") or "").strip()
+                requirements = [fallback or "See the system summary for behavioral requirements."]
+            owner["behavioral_requirements"] = requirements
+            if not owner.get("ports"):
+                # The spec text never compiled this list; clock/reset stubs keep the
+                # manifest renderable instead of failing the whole condensation.
+                stub_names = [
+                    str(item) for item in (manifest.get("clocks") or []) + (manifest.get("resets") or [])
+                    if HDL_NAME_RE.fullmatch(str(item))
+                ] or ["clk"]
+                owner["ports"] = [
+                    {
+                        "name": stub,
+                        "direction": "input",
+                        "width": "1",
+                        "description": f"{stub} (full interface unspecified in source spec; derive from behavioral requirements)",
+                    }
+                    for stub in dict.fromkeys(stub_names)
+                ]
+                requirements.append(
+                    "The source specification did not enumerate this module's ports; derive the full "
+                    "interface from its purpose and its dependents."
+                )
+            name = str(owner.get("name") or "")
+            if not str(owner.get("category") or "").strip():
+                owner["category"] = "submodule"
+            if not str(owner.get("purpose") or "").strip():
+                owner["purpose"] = str(requirements[0])
+            if not str(owner.get("reuse_query") or "").strip():
+                owner["reuse_query"] = f"search for {name or 'submodule'} implementation"
+            dependencies = owner.get("dependencies")
+            if isinstance(dependencies, list):
+                normalized_dependencies: List[str] = []
+                for dependency in dependencies:
+                    if isinstance(dependency, dict):
+                        dependency = dependency.get("name") or dependency.get("module") or ""
+                    dependency = str(dependency).strip()
+                    if dependency and dependency in seen_module_names and dependency != name:
+                        normalized_dependencies.append(dependency)
+                owner["dependencies"] = normalized_dependencies
+    if isinstance(top, dict):
+        _sanitize_top_instances(top, deduped_modules)
+    return manifest
+
+
+def _sanitize_top_instances(top: Dict[str, Any], modules: List[Dict[str, Any]]) -> None:
+    """Normalize instance connections against the (sanitized) module port lists:
+    drop connections to ports the module does not declare, and connect missing
+    ports to same-named nets. Connections are prompt text, not compiled RTL, so
+    same-name wiring is the faithful default."""
+    instances = top.get("instances")
+    if not isinstance(instances, list):
+        return
+    ports_by_module = {
+        str(module.get("name") or ""): {
+            str(port.get("name") or "")
+            for port in module.get("ports") or []
+            if isinstance(port, dict)
+        }
+        for module in modules
+    }
+    for instance in instances:
+        if not isinstance(instance, dict):
+            continue
+        expected = ports_by_module.get(str(instance.get("module") or ""))
+        connections = instance.get("connections")
+        if expected is None or not isinstance(connections, dict):
+            continue
+        cleaned = {
+            port: (str(signal).strip() or port)
+            for port, signal in connections.items()
+            if port in expected
+        }
+        for port in sorted(expected - set(cleaned)):
+            cleaned[port] = port
+        instance["connections"] = cleaned
+
+
+def _sanitize_ports(owner: Dict[str, Any]) -> List[str]:
+    """Repair the ports list in place; return note strings for ports that could
+    not be kept (invalid names such as bus globs)."""
+    ports = owner.get("ports")
+    if not isinstance(ports, list):
+        return []
+    notes: List[str] = []
+    kept: List[Dict[str, Any]] = []
+    seen_names: set[str] = set()
+    for port in ports:
+        if not isinstance(port, dict):
+            continue
+        name = str(port.get("name") or "")
+        direction = str(port.get("direction") or "").lower()
+        width = str(port.get("width") or "").strip()
+        description = str(port.get("description") or "").strip()
+        if not HDL_NAME_RE.fullmatch(name):
+            # Glob/wildcard names (e.g. ``*_icb_cmd_valid``) usually stand for a
+            # bus-signal family; keep the de-globbed identifier when one exists.
+            deglobbed = re.sub(r"[^A-Za-z0-9_]+", "", name).strip("_")
+            if HDL_NAME_RE.fullmatch(deglobbed) and deglobbed not in seen_names:
+                description = (
+                    f"{description + ' ' if description else ''}"
+                    f"(one of a signal family written as {name} in the source spec)"
+                ).strip()
+                name = deglobbed
+            else:
+                label = name or "<unnamed>"
+                notes.append(
+                    f"Port group {label} ({direction or 'unknown direction'}, width {width or 'unspecified'}): "
+                    f"{description or 'expand this signal family into explicit ports.'}"
+                )
+                continue
+        if name in seen_names:
+            continue
+        seen_names.add(name)
+        if direction not in {"input", "output", "inout"}:
+            description = f"{description + ' ' if description else ''}(direction was unspecified; assumed input)".strip()
+            direction = "input"
+        port["name"] = name
+        port["direction"] = direction
+        port["width"] = width or "1"
+        port["description"] = description or name
+        kept.append(port)
+    owner["ports"] = kept
+    return notes
 
 
 def manifest_validation_errors(manifest: Dict[str, Any], expected_top: Optional[str]) -> List[str]:
@@ -471,3 +630,199 @@ def split_bounded_text(text: str, max_chars: int) -> List[str]:
     if remaining:
         chunks.append(remaining)
     return chunks
+
+
+def render_condensed_spec(
+    manifest: Dict[str, Any],
+    *,
+    view: str = "generation",
+    provided_modules: Optional[List[str]] = None,
+    interface_excerpts: str = "",
+) -> str:
+    """Render a chunk&merge manifest as one compact condensed spec.
+
+    Unlike the per-module workspace specs, every shared fact (clocks, resets,
+    constraints) and every module interface appears exactly once, and sections
+    are ordered by importance so head-truncation drops the least useful tail.
+
+    view="planner": short behavioral digest per module, includes reuse queries.
+    view="generation": full behavioral requirements for modules that must be
+    generated; modules named in provided_modules are interface-only.
+    """
+    if view not in {"planner", "generation"}:
+        raise ValueError("view must be 'planner' or 'generation'")
+    provided = {str(name) for name in provided_modules or []}
+    top = manifest.get("top_module") or {}
+    modules = [item for item in manifest.get("modules", []) if isinstance(item, dict)]
+
+    sections: List[str] = []
+    sections.append(
+        "\n".join(
+            [
+                f"TOP MODULE: {top.get('name', 'unknown')}",
+                "",
+                "SYSTEM SUMMARY",
+                str(manifest.get("system_summary") or "unknown"),
+                "",
+                "TOP PUBLIC INTERFACE",
+                json.dumps(top.get("ports", []), ensure_ascii=False, indent=1),
+                "",
+                "TOP SUBMODULE INSTANCES AND CONNECTIONS",
+                json.dumps(top.get("instances", []), ensure_ascii=False, indent=1),
+                "",
+                "SHARED CLOCKS / RESETS / PARAMETERS / CONSTRAINTS",
+                json.dumps(
+                    {
+                        "clocks": manifest.get("clocks", []),
+                        "resets": manifest.get("resets", []),
+                        "parameters": manifest.get("parameters", []),
+                        "shared_constraints": manifest.get("shared_constraints", []),
+                        "assumptions": manifest.get("assumptions", []),
+                        "unknowns": manifest.get("unknowns", []),
+                    },
+                    ensure_ascii=False,
+                    indent=1,
+                ),
+            ]
+        )
+    )
+
+    if interface_excerpts.strip():
+        sections.append(
+            "AUTHORITATIVE INTERFACE EXCERPTS (verbatim from the original specification; "
+            "trust these over any summarized interface above)\n" + interface_excerpts.strip()
+        )
+
+    interface_lines = ["MODULE INTERFACES (each module listed exactly once)"]
+    ordered = _condensed_module_order(manifest, modules, provided)
+    for module in ordered:
+        name = module.get("name", "unknown")
+        tag = " [provided reusable IP - instantiate, do not regenerate]" if name in provided else ""
+        interface_lines.append(f"- {name} ({module.get('category', 'unknown')}){tag}")
+        interface_lines.append(f"  purpose: {module.get('purpose', 'unknown')}")
+        dependencies = ", ".join(string_list(module.get("dependencies"))) or "none"
+        interface_lines.append(f"  dependencies: {dependencies}")
+        interface_lines.append(f"  ports: {json.dumps(module.get('ports', []), ensure_ascii=False)}")
+        if view == "planner" and module.get("reuse_query"):
+            interface_lines.append(f"  reuse_query: {module['reuse_query']}")
+    sections.append("\n".join(interface_lines))
+
+    requirement_lines = ["MODULE BEHAVIORAL REQUIREMENTS"]
+    digest_limit = 3 if view == "planner" else None
+    has_requirements = False
+    for module in ordered:
+        name = module.get("name", "unknown")
+        if name in provided:
+            continue
+        requirements = string_list(module.get("behavioral_requirements"))
+        if not requirements:
+            continue
+        has_requirements = True
+        kept = requirements if digest_limit is None else requirements[:digest_limit]
+        requirement_lines.append(f"=== {name} ===")
+        requirement_lines.extend(f"- {item}" for item in kept)
+        if digest_limit is not None and len(requirements) > digest_limit:
+            requirement_lines.append(f"- ... plus {len(requirements) - digest_limit} more requirement(s)")
+    if has_requirements:
+        sections.append("\n".join(requirement_lines))
+
+    return "\n\n".join(sections).rstrip() + "\n"
+
+
+def _condensed_module_order(
+    manifest: Dict[str, Any],
+    modules: List[Dict[str, Any]],
+    provided: set,
+) -> List[Dict[str, Any]]:
+    """Modules needing generation first (in dependency order), provided IP last,
+    so head-truncation keeps what the generator actually has to build."""
+    by_name = {module.get("name"): module for module in modules}
+    try:
+        order = [name for name in dependency_order(manifest) if name in by_name]
+    except Exception:  # noqa: BLE001 - ordering is best-effort.
+        order = [module.get("name") for module in modules]
+    order.extend(name for name in by_name if name not in order)
+    generated = [by_name[name] for name in order if name not in provided]
+    reused = [by_name[name] for name in order if name in provided]
+    return [*generated, *reused]
+
+
+_PORT_TABLE_HINT_RE = re.compile(r"port|signal|direction|width|input|output", re.IGNORECASE)
+_MODULE_HEADER_RE = re.compile(r"(?ms)^[ \t]*module\s+[A-Za-z_]\w*.*?;")
+
+
+def verbatim_interface_excerpts(raw_spec: str, max_chars: int = 20000) -> str:
+    """Deterministically pull port tables and module headers out of a raw spec.
+
+    These are the facts an LLM summary is most likely to silently mangle, so they
+    are carried into the condensed spec verbatim, bypassing the LLM entirely.
+    """
+    blocks: List[str] = []
+
+    table: List[str] = []
+    for line in [*raw_spec.splitlines(), ""]:
+        if line.lstrip().startswith("|"):
+            table.append(line.rstrip())
+            continue
+        if len(table) >= 3 and _PORT_TABLE_HINT_RE.search("\n".join(table[:2])):
+            blocks.append("\n".join(table))
+        table = []
+
+    seen_headers: set = set()
+    for match in _MODULE_HEADER_RE.finditer(raw_spec):
+        header = match.group(0).strip()
+        if len(header) > 4000:
+            header = header[:4000] + " /* header truncated */"
+        name_match = re.match(r"module\s+([A-Za-z_]\w*)", header)
+        key = name_match.group(1) if name_match else header[:80]
+        if key in seen_headers:
+            continue
+        seen_headers.add(key)
+        blocks.append(header)
+
+    kept: List[str] = []
+    used = 0
+    for block in blocks:
+        if used + len(block) + 2 > max_chars:
+            continue
+        kept.append(block)
+        used += len(block) + 2
+    return "\n\n".join(kept)
+
+
+_MACRO_RE = re.compile(r"`\s?([A-Za-z_]\w*)")
+_VERILOG_DIRECTIVES = {
+    "include", "define", "undef", "undefineall", "ifdef", "ifndef", "elsif", "else",
+    "endif", "timescale", "default_nettype", "resetall", "celldefine", "endcelldefine",
+    "line", "pragma", "begin_keywords", "end_keywords",
+}
+
+
+def condensation_fidelity_report(raw_spec: str, condensed: str) -> Dict[str, Any]:
+    """Deterministic check that safety-critical identifiers survived condensation:
+    macro names and identifiers from port-table rows. Misses become visible signal
+    instead of silent loss."""
+    macros = {
+        name for name in _MACRO_RE.findall(raw_spec) if name.lower() not in _VERILOG_DIRECTIVES
+    }
+    identifiers: set = set()
+    for line in raw_spec.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [cell.strip().strip("`*") for cell in stripped.strip("|").split("|")]
+        if not cells:
+            continue
+        first = cells[0]
+        if re.fullmatch(r"[A-Za-z_]\w*", first) and not set(first) <= {"-", ":"}:
+            identifiers.add(first)
+    identifiers -= {"input", "output", "inout", "Port", "port", "Signal", "signal", "Name", "name"}
+
+    missing_macros = sorted(name for name in macros if name not in condensed)
+    missing_identifiers = sorted(name for name in identifiers if name not in condensed)
+    return {
+        "macros_total": len(macros),
+        "macros_missing": missing_macros,
+        "identifiers_total": len(identifiers),
+        "identifiers_missing": missing_identifiers,
+    }

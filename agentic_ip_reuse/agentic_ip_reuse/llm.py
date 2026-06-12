@@ -45,15 +45,20 @@ class VllmClient:
         if parallel_tool_calls is not None:
             payload["parallel_tool_calls"] = parallel_tool_calls
         body = self._post_chat_completion(payload)
-        message = body["choices"][0]["message"]
+        choice = body["choices"][0]
+        message = choice["message"]
         # Reasoning-parser deployments can leave "content" empty while the actual
         # answer sits in "reasoning_content"; without this fallback the agent sees
-        # an empty final response and needs a wasted forced-final retry.
+        # an empty final response and needs a wasted forced-final retry. The
+        # promoted text is usually working notes, not an answer, so it is marked
+        # for callers that must not accept it as final output.
         if not (message.get("content") or "").strip() and not message.get("tool_calls"):
             reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
             if str(reasoning).strip():
                 message = dict(message)
                 message["content"] = str(reasoning)
+                message["_content_from_reasoning"] = True
+        message["_finish_reason"] = choice.get("finish_reason")
         return message
 
     def _post_chat_completion(self, payload: Dict[str, Any]) -> Dict[str, Any]:

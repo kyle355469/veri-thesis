@@ -85,3 +85,27 @@ def make_embedder(name: str) -> Embedder:
     if name.startswith("sentence-transformers/") or name.startswith("BAAI/"):
         return SentenceTransformerEmbedder(name)
     raise ValueError(f"Unknown embedder '{name}'. Use 'hash' or a sentence-transformers model name.")
+
+
+DEFAULT_ST_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+
+def make_embedder_with_fallback(name: str = "auto", warn=print) -> tuple[Embedder, str]:
+    """Resolve an embedder by name, falling back to HashingEmbedder when
+    sentence-transformers (or its model download) is unavailable.
+
+    Returns (embedder, resolved_name) where resolved_name is what should be
+    recorded in index metadata and run reports ("hash" or the ST model name).
+    """
+    if name == "hash":
+        return HashingEmbedder(), "hash"
+    model_name = DEFAULT_ST_MODEL if name == "auto" else name
+    try:
+        return SentenceTransformerEmbedder(model_name), model_name
+    except (ImportError, OSError) as exc:
+        warn(
+            f"[rag] sentence-transformers embedder '{model_name}' unavailable ({exc}); "
+            "falling back to HashingEmbedder — semantic scores will be coarser, "
+            "consider lowering --planner-retrieval-min-score"
+        )
+        return HashingEmbedder(), "hash"

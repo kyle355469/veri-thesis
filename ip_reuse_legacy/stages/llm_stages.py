@@ -41,7 +41,7 @@ class LlmStagesMixin:
                 raise
 
     def _complete_text(self, stage: str, prompt: str, traces: List[LlmTrace]) -> str:
-        self._stage(f"llm:{stage}", "running")
+        self._stage(f"llm:{stage}", "running", prompt_chars=len(prompt))
         last_exc: Optional[Exception] = None
         response = ""
         for attempt in range(self.config.max_generation_retries + 1):
@@ -65,6 +65,8 @@ class LlmStagesMixin:
                 prompt_preview=preview_text(prompt),
                 response_preview=preview_text(response),
                 parsed=False,
+                prompt_chars=len(prompt),
+                response_chars=len(response),
             )
         )
         self._stage(f"llm:{stage}", "complete", response_chars=len(response))

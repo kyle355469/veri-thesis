@@ -9,6 +9,7 @@ from ..manifest import (
     group_manifest_payloads as _group_manifest_payloads,
     manifest_validation_errors as _manifest_validation_errors,
     markdown_chunks as _markdown_chunks,
+    sanitize_manifest as _sanitize_manifest,
     write_text as _write_text,
 )
 from ..prompts import (
@@ -45,7 +46,7 @@ class PartitionStagesMixin:
                 response_path = errors_dir / "full_split_response.txt"
                 _write_text(response_path, response)
                 artifacts["split_response:full"] = str(response_path)
-                payload = _parse_json_object(response) or {}
+                payload = _sanitize_manifest(_parse_json_object(response) or {})
                 validation_errors = _manifest_validation_errors(payload, top_module)
                 if not validation_errors:
                     self._stage("large_spec_split", "complete", mode="full", module_count=len(payload["modules"]))
@@ -106,6 +107,7 @@ class PartitionStagesMixin:
             errors_dir=errors_dir,
             artifacts=artifacts,
         )
+        manifest = _sanitize_manifest(manifest)
         validation_errors = _manifest_validation_errors(manifest, top_module)
         if validation_errors:
             try:
@@ -122,8 +124,14 @@ class PartitionStagesMixin:
             correction_path = errors_dir / "corrected_split_response.txt"
             _write_text(correction_path, correction_response)
             artifacts["split_response:corrected"] = str(correction_path)
-            manifest = _parse_json_object(correction_response) or {}
-            validation_errors = _manifest_validation_errors(manifest, top_module)
+            # Keep whichever manifest validates better; an empty or unparsable
+            # correction must never clobber the merged manifest.
+            corrected = _parse_json_object(correction_response)
+            if corrected is not None:
+                corrected = _sanitize_manifest(corrected)
+                corrected_errors = _manifest_validation_errors(corrected, top_module)
+                if len(corrected_errors) < len(validation_errors):
+                    manifest, validation_errors = corrected, corrected_errors
         if validation_errors:
             validation_path = errors_dir / "manifest_validation.json"
             _write_text(validation_path, json.dumps(validation_errors, indent=2))

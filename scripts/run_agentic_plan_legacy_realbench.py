@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -20,6 +21,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from tqdm import tqdm
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PLANNER_ROOT = REPO_ROOT / "agentic_ip_reuse"
 for path in (str(PLANNER_ROOT), str(REPO_ROOT)):
@@ -29,15 +32,18 @@ for path in (str(PLANNER_ROOT), str(REPO_ROOT)):
 from agentic_ip_reuse.agent import AgentConfig, AgenticIpReuseAgent as PlanningAgent, dumps_result as dumps_plan_result
 from agentic_ip_reuse.llm import VllmClient as PlanningVllmClient
 from agentic_ip_reuse.repository import JsonIpRepository
+from agentic_ip_reuse.semantic_repository import SemanticIpRepository
 from agentic_ip_reuse.tools import AgentToolExecutor
 from agentic_ip_reuse.types import AgentResult as PlanningResult, DesignTask
 from ip_reuse_legacy.agent import AgenticIpReuseAgent as LegacyAgent
 from ip_reuse_legacy.config import AgenticIpReuseConfig as LegacyConfig
 from ip_reuse_legacy.plan_adapter import agentic_plan_from_payload
 from ip_reuse_legacy.types import IpReusePlan
-from rag_rtl.embeddings import HashingEmbedder
+from rag_rtl.embeddings import HashingEmbedder, make_embedder_with_fallback
 from rag_rtl.json_utils import dumps_json
 from rag_rtl.llm import VllmClient as LegacyVllmClient, extract_code
+from rag_rtl.repair_cache import RepairFixCache
+from rag_rtl.retrieval import LexicalReranker, Retriever
 from rag_rtl.retrieval_context import RetrievalContext
 from rag_rtl.types import Diagnostic, RtlDocument, VerificationReport
 from rag_rtl.vector_store import VectorStore
@@ -139,10 +145,21 @@ class RealBenchWorkspaceVerifier:
         "-Wno-WIDTHEXPAND",
     ]
 
-    def __init__(self, verilator_bin: str, timeout_s: int, extra_sources: Sequence[Path]):
+    def __init__(
+        self,
+        verilator_bin: str,
+        timeout_s: int,
+        extra_sources: Sequence[Path],
+        wno_flags: Optional[Sequence[str]] = None,
+        lint_top: Optional[str] = None,
+    ):
         self.verilator_bin = verilator_bin
         self.timeout_s = timeout_s
         self.extra_sources = list(extra_sources)
+        self.wno_flags = list(wno_flags) if wno_flags else list(self.WNO_FLAGS)
+        # When the testbench is part of the lint file set, the elaboration top is
+        # the testbench module (as in the eval Makefile), not the candidate.
+        self.lint_top = lint_top
 
     def verify(self, rtl: str, top_module: str | None = None) -> VerificationReport:
         if shutil.which(self.verilator_bin) is None:
@@ -162,9 +179,10 @@ class RealBenchWorkspaceVerifier:
                 candidate_name = f"{top_module or 'candidate'}.gen.sv"
                 (temp_dir / candidate_name).write_text(rtl, encoding="utf-8")
                 file_names.append(candidate_name)
-                command = [self.verilator_bin, "--lint-only", "--timing", *self.WNO_FLAGS]
-                if top_module:
-                    command += ["--top-module", top_module]
+                command = [self.verilator_bin, "--lint-only", "--timing", *self.wno_flags]
+                effective_top = self.lint_top or top_module
+                if effective_top:
+                    command += ["--top-module", effective_top]
                 command += file_names
                 completed = subprocess.run(
                     command,
@@ -222,16 +240,89 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--planner-tool-choice", default="auto")
     parser.add_argument("--target-hdl", default="systemverilog")
     parser.add_argument(
+        "--planner-search-mode",
+        choices=["token", "semantic", "hybrid"],
+        default="token",
+        help="Backend for the planner's search_reuse_ip tool: token overlap (legacy), embedding "
+        "retrieval over the task catalog, or semantic results topped up with token matches.",
+    )
+    parser.add_argument(
+        "--embedder",
+        default="auto",
+        help="Embedder for retrieval and the repair cache: 'auto' (sentence-transformers MiniLM, "
+        "falling back to the hashing embedder when unavailable), 'hash', or a sentence-transformers model name.",
+    )
+    parser.add_argument(
+        "--planner-retrieval-min-score",
+        type=float,
+        default=0.30,
+        help="Rerank-score floor for semantic IP search; results below it are flagged or dropped "
+        "so weak retrievals never read as confident matches.",
+    )
+    parser.add_argument(
+        "--planner-retrieval-below-threshold",
+        choices=["flag", "drop"],
+        default="flag",
+        help="What to do with below-threshold candidates: tag them retrieval_confidence=low or remove them.",
+    )
+    parser.add_argument(
+        "--reindex",
+        action="store_true",
+        help="Force re-embedding of the per-task catalog indexes even when cached ones match.",
+    )
+    parser.add_argument(
+        "--repair-cache",
+        choices=["off", "task", "run"],
+        default="off",
+        help="Semantic cache of verified Verilator-diagnostic->fix pairs injected as repair-prompt "
+        "guidance: off, one cache per task, or one cache shared across the run.",
+    )
+    parser.add_argument(
+        "--repair-cache-path",
+        help="Persistence path for the run-scope repair cache (default: <output-dir>/repair_cache.json).",
+    )
+    parser.add_argument(
+        "--repair-cache-evidence-threshold",
+        type=float,
+        default=0.85,
+        help="Minimum similarity for a cached fix to be injected as guidance.",
+    )
+    parser.add_argument(
+        "--repair-cache-reuse-threshold",
+        type=float,
+        default=0.95,
+        help="Similarity labeled as near-exact in cache events; guidance-only either way, never auto-applied.",
+    )
+    parser.add_argument(
+        "--repair-cache-max-hint-chars",
+        type=int,
+        default=1800,
+        help="Cap on each cached fix excerpt injected into repair prompts.",
+    )
+    parser.add_argument(
         "--spec-condense-threshold-chars",
         type=int,
         default=200000,
         help="Specs longer than this are condensed with the ip_reuse_legacy chunk&merge pipeline before planning.",
     )
     parser.add_argument(
+        "--spec-condense-threshold-tokens",
+        type=int,
+        default=45000,
+        help="Specs whose estimated token count exceeds this are condensed even if under the char threshold; "
+        "condensed views are also clipped to this token budget.",
+    )
+    parser.add_argument(
         "--condense-chunk-chars",
         type=int,
         default=30000,
         help="Chunk size used when condensing oversized specs.",
+    )
+    parser.add_argument(
+        "--verbatim-excerpt-max-chars",
+        type=int,
+        default=24000,
+        help="Budget for verbatim port tables / module headers carried unmodified into condensed specs.",
     )
 
     parser.add_argument("--legacy-max-tokens", type=int, default=80000)
@@ -271,6 +362,20 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Skip the internal Verilator lint (against dependency/defines files) that drives the repair loop.",
+    )
+    parser.add_argument(
+        "--legacy-lint-with-testbench",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include the testbench/reference files in the internal lint so it mirrors the eval compile "
+        "exactly (catches PINNOTFOUND/MODDUP); only Verilator diagnostics reach the repair prompt, "
+        "never the reference source.",
+    )
+    parser.add_argument(
+        "--testbench-contract-max-chars",
+        type=int,
+        default=8000,
+        help="Cap on the testbench DUT-instantiation snippet embedded in RTL prompts as the port contract.",
     )
     parser.add_argument("--yosys-bin", default="yosys")
     parser.add_argument("--verilator-bin", default="verilator")
@@ -543,7 +648,13 @@ def report_path(output_dir: Path, item: WorkItem) -> Path:
     return output_dir / "reports" / item.task.level / item.task.system / f"{item.task.task}_sample{item.sample:02d}.json"
 
 
-def run_one(item: WorkItem, args: argparse.Namespace, output_dir: Path, catalogs: Dict[str, CatalogBundle]) -> Dict[str, Any]:
+def run_one(
+    item: WorkItem,
+    args: argparse.Namespace,
+    output_dir: Path,
+    catalogs: Dict[str, CatalogBundle],
+    rag: RagRuntime,
+) -> Dict[str, Any]:
     task = item.task
     catalog = catalogs[task.task_id]
     code_path = generated_code_path(output_dir, item)
@@ -563,6 +674,8 @@ def run_one(item: WorkItem, args: argparse.Namespace, output_dir: Path, catalogs
     planner_result: Optional[PlanningResult] = None
     legacy_result: Any = None
     spec_condensed = False
+    planner_repository: Any = None
+    repair_cache = rag.repair_cache_for(task.task_id)
 
     if not catalog.usable:
         generation_error = f"missing dependency source(s): {', '.join(catalog.missing_dependencies)}"
@@ -576,17 +689,20 @@ def run_one(item: WorkItem, args: argparse.Namespace, output_dir: Path, catalogs
     else:
         t0 = time.perf_counter()
         try:
-            spec_text = effective_spec(task, args, output_dir)
-            spec_condensed = spec_text != task.prompt
-            planner_result = run_planner(task, catalog, args, plan_dir, spec_text)
+            spec_bundle = effective_spec(task, catalog, args, output_dir)
+            spec_condensed = spec_bundle.condensed
+            planner_repository = make_planner_repository(task, catalog, args, rag)
+            planner_result = run_planner(task, catalog, args, plan_dir, spec_bundle.planner, planner_repository)
             plan_report_path.write_text(dumps_plan_result(planner_result), encoding="utf-8")
             legacy_plan = agentic_plan_from_payload(planner_result.to_dict())
             enrich_legacy_plan_with_sources(legacy_plan, catalog, task, args)
-            legacy_result = run_legacy_generator(task, legacy_plan, args, legacy_workspace, catalog, spec_text)
+            legacy_result = run_legacy_generator(
+                task, legacy_plan, args, legacy_workspace, catalog, spec_bundle.generation, repair_cache
+            )
             legacy_report_path.write_text(dumps_json(legacy_result.to_dict(), indent=2), encoding="utf-8")
             code = normalize_code(legacy_result.rtl, task.top_module)
             if code:
-                code = strip_dependency_redeclarations(code, provided_dependency_modules(task, catalog))
+                code = strip_dependency_redeclarations(code, template_provided_module_names(task))
         except Exception as exc:  # noqa: BLE001 - keep benchmark moving.
             generation_error = f"{exc}\n{traceback.format_exc()[-4000:]}"
         wall_s = time.perf_counter() - t0
@@ -623,6 +739,11 @@ def run_one(item: WorkItem, args: argparse.Namespace, output_dir: Path, catalogs
         "planner_steps": planner_result.steps if planner_result else None,
         "planner_used_tools": planner_result.used_tools if planner_result else None,
         "legacy_repair_attempts": legacy_result.repair_attempts if legacy_result else None,
+        "planner_search_mode": args.planner_search_mode,
+        "embedder": rag.embedder_name,
+        "retrieval_metrics": retrieval_metrics_from(planner_repository, rag.index_meta.get(task.task_id)),
+        "repair_cache_metrics": repair_cache_metrics_from(args, legacy_result),
+        "llm_token_estimate": llm_token_estimate_from(legacy_result),
         "spec_chars": len(task.prompt),
         "spec_condensed": spec_condensed,
         "syntax": eval_result.syntax,
@@ -647,9 +768,11 @@ def run_planner(
     args: argparse.Namespace,
     output_dir: Path,
     spec_text: str,
+    repository: Any = None,
 ) -> PlanningResult:
     output_dir.mkdir(parents=True, exist_ok=True)
-    repository = JsonIpRepository(catalog.catalog_path)
+    if repository is None:
+        repository = JsonIpRepository(catalog.catalog_path)
     executor = AgentToolExecutor(repository, output_dir)
     llm = PlanningVllmClient(
         base_url=args.base_url or os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1"),
@@ -687,24 +810,281 @@ def make_legacy_llm(args: argparse.Namespace) -> LegacyVllmClient:
     )
 
 
-def make_legacy_agent(args: argparse.Namespace, verifier: Any, config: LegacyConfig) -> LegacyAgent:
+def make_legacy_agent(
+    args: argparse.Namespace,
+    verifier: Any,
+    config: LegacyConfig,
+    repair_cache: Any = None,
+) -> LegacyAgent:
     embedder = HashingEmbedder(dim=128)
     retrieval_context = RetrievalContext.from_store(VectorStore([], embedder.encode([])), embedder)
-    return LegacyAgent(make_legacy_llm(args), retrieval_context, verifier, config)
+    return LegacyAgent(make_legacy_llm(args), retrieval_context, verifier, config, repair_cache=repair_cache)
+
+
+class LockedEmbedder:
+    """Serializes encode() calls; sentence-transformers models are not guaranteed
+    thread-safe and run_one executes inside a ThreadPoolExecutor."""
+
+    def __init__(self, inner: Any):
+        self.inner = inner
+        self.dim = inner.dim
+        self._lock = threading.Lock()
+
+    def encode(self, texts):
+        with self._lock:
+            return self.inner.encode(texts)
+
+
+@dataclass
+class RagRuntime:
+    """Run-wide retrieval/cache state shared across work items."""
+
+    embedder: Any = None
+    embedder_name: str = "none"
+    stores: Dict[str, VectorStore] = field(default_factory=dict)
+    index_meta: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    repair_caches: Dict[str, Any] = field(default_factory=dict)
+    repair_cache_scope: str = "off"
+
+    def repair_cache_for(self, task_id: str) -> Any:
+        if self.repair_cache_scope == "run":
+            return self.repair_caches.get("__run__")
+        if self.repair_cache_scope == "task":
+            return self.repair_caches.get(task_id)
+        return None
+
+
+def build_rag_runtime(
+    args: argparse.Namespace,
+    output_dir: Path,
+    tasks: Sequence[RealBenchTask],
+    catalogs: Dict[str, CatalogBundle],
+) -> RagRuntime:
+    rag = RagRuntime(repair_cache_scope=args.repair_cache)
+    if args.planner_search_mode == "token" and args.repair_cache == "off":
+        return rag
+    embedder, embedder_name = make_embedder_with_fallback(args.embedder, warn=lambda message: print(f"[realbench] {message}"))
+    rag.embedder = LockedEmbedder(embedder)
+    rag.embedder_name = embedder_name
+    if args.planner_search_mode != "token":
+        for task in tasks:
+            catalog = catalogs[task.task_id]
+            store, meta = build_or_load_task_index(catalog.catalog_path, rag.embedder, embedder_name, args.reindex)
+            rag.stores[task.task_id] = store
+            rag.index_meta[task.task_id] = meta
+            print(
+                f"[realbench] index {task.task_id}: docs={meta['doc_count']} "
+                f"embedder={embedder_name} rebuilt={meta.get('index_built', False)}"
+            )
+    if args.repair_cache == "run":
+        cache_path = Path(args.repair_cache_path) if args.repair_cache_path else output_dir / "repair_cache.json"
+        rag.repair_caches["__run__"] = make_repair_cache(args, rag.embedder, cache_path)
+    elif args.repair_cache == "task":
+        for task in tasks:
+            cache_path = output_dir / "repair_cache" / f"{task.task_id}.json"
+            rag.repair_caches[task.task_id] = make_repair_cache(args, rag.embedder, cache_path)
+    return rag
+
+
+def make_repair_cache(args: argparse.Namespace, embedder: Any, path: Path) -> RepairFixCache:
+    return RepairFixCache(
+        embedder=embedder,
+        path=path,
+        evidence_threshold=args.repair_cache_evidence_threshold,
+        reuse_threshold=args.repair_cache_reuse_threshold,
+        max_hint_chars=args.repair_cache_max_hint_chars,
+    )
+
+
+def catalog_index_documents(catalog_path: Path) -> List[RtlDocument]:
+    payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+    documents: List[RtlDocument] = []
+    for item in payload.get("ips", []):
+        interfaces = " ".join(str(entry) for entry in item.get("interfaces", []))
+        documents.append(
+            RtlDocument(
+                doc_id=str(item["ip_id"]),
+                # Embed what the IP *is* (name, summary, interfaces) plus a slice of
+                # its body; MiniLM truncates around 256 tokens so full RTL is wasted.
+                problem=f"{item.get('name', '')}: {item.get('summary', '')}\n{interfaces}",
+                solution=str(item.get("behavior", ""))[:1500],
+                tags=[str(tag) for tag in item.get("tags", [])],
+            )
+        )
+    return documents
+
+
+def build_or_load_task_index(
+    catalog_path: Path,
+    embedder: Any,
+    embedder_name: str,
+    reindex: bool,
+) -> Tuple[VectorStore, Dict[str, Any]]:
+    index_dir = catalog_path.with_suffix(".index")
+    meta_path = index_dir / "index_meta.json"
+    catalog_sha = hashlib.sha256(catalog_path.read_bytes()).hexdigest()
+    if not reindex and meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            meta = {}
+        if (
+            meta.get("catalog_sha256") == catalog_sha
+            and meta.get("embedder_name") == embedder_name
+            and meta.get("dim") == embedder.dim
+        ):
+            return VectorStore.load(index_dir), {**meta, "index_built": False}
+    documents = catalog_index_documents(catalog_path)
+    t0 = time.perf_counter()
+    vectors = embedder.encode([document.retrieval_text for document in documents])
+    embed_s = round(time.perf_counter() - t0, 4)
+    store = VectorStore(documents, vectors)
+    store.save(index_dir)
+    meta = {
+        "embedder_name": embedder_name,
+        "dim": embedder.dim,
+        "catalog_sha256": catalog_sha,
+        "doc_count": len(documents),
+        "embed_s": embed_s,
+    }
+    meta_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    return store, {**meta, "index_built": True}
+
+
+def make_planner_repository(task: RealBenchTask, catalog: CatalogBundle, args: argparse.Namespace, rag: RagRuntime) -> Any:
+    repository = JsonIpRepository(catalog.catalog_path)
+    if args.planner_search_mode == "token":
+        return repository
+    store = rag.stores.get(task.task_id)
+    if store is None or rag.embedder is None:
+        return repository
+    return SemanticIpRepository(
+        inner=repository,
+        retriever=Retriever(store, rag.embedder),
+        reranker=LexicalReranker(),
+        mode=args.planner_search_mode,
+        min_score=args.planner_retrieval_min_score,
+        below_threshold=args.planner_retrieval_below_threshold,
+    )
+
+
+def retrieval_metrics_from(repository: Any, index_meta: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    traces = getattr(repository, "traces", None)
+    if traces is None:
+        return None
+    top_scores = [trace.top_score for trace in traces if trace.top_score is not None]
+    return {
+        "searches": len(traces),
+        "mean_top_score": round(sum(top_scores) / len(top_scores), 4) if top_scores else None,
+        "low_confidence_searches": sum(1 for trace in traces if trace.low_confidence),
+        "filtered_below_threshold": sum(trace.filtered_below_threshold for trace in traces),
+        "retrieval_latency_s": round(sum(trace.latency_s for trace in traces), 4),
+        "index_built": bool(index_meta and index_meta.get("index_built")),
+        "index_embed_s": index_meta.get("embed_s") if index_meta else None,
+    }
+
+
+def repair_cache_metrics_from(args: argparse.Namespace, legacy_result: Any) -> Dict[str, Any]:
+    if args.repair_cache == "off":
+        return {"enabled": False}
+    events = list(getattr(legacy_result, "repair_cache_events", []) or []) if legacy_result else []
+    lookups = [event for event in events if event.get("event") == "lookup"]
+    hits = [event for event in lookups if event.get("decision") in ("evidence", "reuse")]
+    return {
+        "enabled": True,
+        "scope": args.repair_cache,
+        "lookups": len(lookups),
+        "hits": len(hits),
+        "hit_scores": [round(float(event["score"]), 4) for event in hits if event.get("score") is not None],
+        "hints_injected": sum(1 for event in lookups if event.get("injected")),
+        "fixes_recorded": sum(1 for event in events if event.get("event") == "record"),
+    }
+
+
+# Calibrated against the one measured RealBench point (703,806 chars = 160,645 tokens).
+EST_CHARS_PER_TOKEN = 4.38
+
+
+def llm_token_estimate_from(legacy_result: Any) -> Optional[Dict[str, Any]]:
+    traces = getattr(legacy_result, "llm_traces", None) if legacy_result else None
+    if not traces:
+        return None
+    per_stage: Dict[str, Dict[str, int]] = {}
+    total_prompt_chars = 0
+    total_response_chars = 0
+    for trace in traces:
+        prompt_chars = int(getattr(trace, "prompt_chars", 0) or 0)
+        response_chars = int(getattr(trace, "response_chars", 0) or 0)
+        total_prompt_chars += prompt_chars
+        total_response_chars += response_chars
+        stage = per_stage.setdefault(trace.stage, {"prompt_chars": 0, "response_chars": 0})
+        stage["prompt_chars"] += prompt_chars
+        stage["response_chars"] += response_chars
+    return {
+        "prompt_tokens": int(total_prompt_chars / EST_CHARS_PER_TOKEN),
+        "response_tokens": int(total_response_chars / EST_CHARS_PER_TOKEN),
+        "prompt_chars": total_prompt_chars,
+        "response_chars": total_response_chars,
+        "llm_calls": len(traces),
+        "per_stage": per_stage,
+    }
 
 
 _CONDENSE_LOCK = threading.Lock()
 
+_TOKEN_PIECE_RE = re.compile(r"[A-Za-z0-9_]+|[^\sA-Za-z0-9_]")
+_TOKEN_WORD_RE = re.compile(r"[A-Za-z0-9_]+")
 
-def effective_spec(task: RealBenchTask, args: argparse.Namespace, output_dir: Path) -> str:
-    """Return the task spec, condensed via the ip_reuse_legacy chunk&merge pipeline
-    when it is too large to fit the model context. Condensed specs are cached per task."""
-    if len(task.prompt) <= args.spec_condense_threshold_chars:
-        return task.prompt
-    cache_path = output_dir / "condensed_specs" / f"{task.task_id}.txt"
+
+def estimate_tokens(text: str) -> int:
+    """Tokenizer-free token estimate: one per word/punctuation piece plus a
+    surcharge for long identifiers that BPE splits. Calibrated against the one
+    measured RealBench point (e203_cpu_top: 703,806 chars = 160,645 tokens;
+    estimate lands ~4% above, i.e. safely conservative)."""
+    pieces = len(_TOKEN_PIECE_RE.findall(text))
+    surcharge = sum((len(word) - 1) // 6 for word in _TOKEN_WORD_RE.findall(text))
+    return pieces + surcharge
+
+
+def clip_to_token_budget(text: str, max_tokens: int) -> str:
+    estimated = estimate_tokens(text)
+    if estimated <= max_tokens:
+        return text
+    chars_per_token = len(text) / max(estimated, 1)
+    return clip_text(text, int(max_tokens * chars_per_token))
+
+
+@dataclass(frozen=True)
+class SpecBundle:
+    planner: str
+    generation: str
+    condensed: bool
+
+
+def effective_spec(
+    task: RealBenchTask,
+    catalog: CatalogBundle,
+    args: argparse.Namespace,
+    output_dir: Path,
+) -> SpecBundle:
+    """Return the task spec for each pipeline stage, condensed via the
+    ip_reuse_legacy chunk&merge pipeline when it is too large to fit the model
+    context (by chars or estimated tokens). Condensed views are cached per task."""
+    if (
+        len(task.prompt) <= args.spec_condense_threshold_chars
+        and estimate_tokens(task.prompt) <= args.spec_condense_threshold_tokens
+    ):
+        return SpecBundle(planner=task.prompt, generation=task.prompt, condensed=False)
+    cache_dir = output_dir / "condensed_specs"
+    planner_path = cache_dir / f"{task.task_id}.planner.txt"
+    generation_path = cache_dir / f"{task.task_id}.generation.txt"
     with _CONDENSE_LOCK:
-        if cache_path.exists():
-            return cache_path.read_text(encoding="utf-8")
+        if planner_path.exists() and generation_path.exists():
+            return SpecBundle(
+                planner=planner_path.read_text(encoding="utf-8"),
+                generation=generation_path.read_text(encoding="utf-8"),
+                condensed=True,
+            )
         agent = make_legacy_agent(
             args,
             verifier=NoopVerifier(),
@@ -716,20 +1096,38 @@ def effective_spec(task: RealBenchTask, args: argparse.Namespace, output_dir: Pa
                 decomposition_mode="chunking",
             ),
         )
-        condensed = agent.condense_spec(
+        views = agent.condense_spec_views(
             task.prompt,
             target_hdl=args.target_hdl,
             top_module=task.top_module,
             constraints=task_constraints(task),
             workspace_dir=output_dir / "condense_workspaces" / task.task_id,
+            provided_modules=template_provided_module_names(task),
+            excerpt_max_chars=args.verbatim_excerpt_max_chars,
         )
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(condensed, encoding="utf-8")
+        # Sections are rendered most-important-first (top interface, verbatim
+        # excerpts, module interfaces, then behavioral detail), so clipping to
+        # the context budget drops the least useful tail.
+        bundle = SpecBundle(
+            planner=clip_to_token_budget(
+                clip_text(views["planner"], args.spec_condense_threshold_chars),
+                args.spec_condense_threshold_tokens,
+            ),
+            generation=clip_to_token_budget(
+                clip_text(views["generation"], args.spec_condense_threshold_chars),
+                args.spec_condense_threshold_tokens,
+            ),
+            condensed=True,
+        )
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        planner_path.write_text(bundle.planner, encoding="utf-8")
+        generation_path.write_text(bundle.generation, encoding="utf-8")
         print(
-            f"[realbench] condensed spec for {task.task_id}: "
-            f"{len(task.prompt)} -> {len(condensed)} chars"
+            f"[realbench] condensed spec for {task.task_id}: {len(task.prompt)} chars -> "
+            f"planner {len(bundle.planner)} / generation {len(bundle.generation)} chars "
+            f"(~{estimate_tokens(bundle.generation)} tokens)"
         )
-        return condensed
+        return bundle
 
 
 def run_legacy_generator(
@@ -739,12 +1137,20 @@ def run_legacy_generator(
     workspace_dir: Path,
     catalog: CatalogBundle,
     spec_text: str,
+    repair_cache: Any = None,
 ) -> Any:
-    verifier = NoopVerifier() if args.legacy_skip_internal_verify else RealBenchWorkspaceVerifier(
-        verilator_bin=args.verilator_bin,
-        timeout_s=args.agent_timeout_s,
-        extra_sources=internal_verify_sources(task),
-    )
+    if args.legacy_skip_internal_verify:
+        verifier: Any = NoopVerifier()
+    else:
+        wno_flags, makefile_top = makefile_lint_settings(task)
+        include_testbench = bool(args.legacy_lint_with_testbench and makefile_top)
+        verifier = RealBenchWorkspaceVerifier(
+            verilator_bin=args.verilator_bin,
+            timeout_s=args.agent_timeout_s,
+            extra_sources=internal_verify_sources(task, include_testbench=include_testbench),
+            wno_flags=wno_flags or None,
+            lint_top=makefile_top if include_testbench else None,
+        )
     agent = make_legacy_agent(
         args,
         verifier,
@@ -754,6 +1160,7 @@ def run_legacy_generator(
             temperature=args.temperature,
             max_tokens=args.legacy_max_tokens,
         ),
+        repair_cache=repair_cache,
     )
     provided_signatures, inline_signatures = reuse_module_signatures(task, catalog)
     provided_signatures = {
@@ -780,7 +1187,7 @@ def run_legacy_generator(
         workspace_dir=workspace_dir,
         original_spec=clip_text(spec_text, spec_cap),
         reuse_modules=provided_signatures,
-        environment_notes=build_environment_notes(task, provided_signatures, inline_signatures),
+        environment_notes=build_environment_notes(task, provided_signatures, inline_signatures, args),
     )
 
 
@@ -805,14 +1212,6 @@ def reuse_module_signatures(task: RealBenchTask, catalog: CatalogBundle) -> Tupl
     return provided, inline
 
 
-def provided_dependency_modules(task: RealBenchTask, catalog: CatalogBundle) -> List[str]:
-    return [
-        source.name
-        for source in catalog.sources
-        if source.kind == "dependency" and template_resident(task, source.path)
-    ]
-
-
 def template_defines_files(task: RealBenchTask) -> List[Path]:
     template_dir = task_verification_dir(task)
     if not template_dir.exists():
@@ -826,12 +1225,14 @@ def template_defines_files(task: RealBenchTask) -> List[Path]:
     ]
 
 
-def internal_verify_sources(task: RealBenchTask) -> List[Path]:
+def internal_verify_sources(task: RealBenchTask, include_testbench: bool = False) -> List[Path]:
     """Files compiled together with the candidate RTL during internal lint.
 
     Mirrors the eval Makefile (which compiles every *.v/*.sv in the template dir)
-    minus the candidate slot and the testbench/reference collateral, so transitive
-    dependencies and defines files are present without leaking the golden solution."""
+    minus the candidate slot. With include_testbench the file set matches the eval
+    exactly (testbench/reference included), so the repair loop sees the same
+    PINNOTFOUND/MODDUP errors the final evaluation would; otherwise the
+    testbench/reference collateral is left out."""
     template_dir = task_verification_dir(task)
     if not template_dir.exists():
         return []
@@ -848,7 +1249,9 @@ def internal_verify_sources(task: RealBenchTask) -> List[Path]:
     others: List[Path] = []
     for path in sorted([*template_dir.glob("*.v"), *template_dir.glob("*.sv")]):
         name = path.name
-        if name == top_filename or name.startswith("ref_") or name.endswith(excluded_suffixes):
+        if name == top_filename:
+            continue
+        if not include_testbench and (name.startswith("ref_") or name.endswith(excluded_suffixes)):
             continue
         if path.name == "config.v" or "defines" in path.name.lower():
             defines.append(path)
@@ -857,12 +1260,74 @@ def internal_verify_sources(task: RealBenchTask) -> List[Path]:
     return [*defines, *others]
 
 
+def makefile_lint_settings(task: RealBenchTask) -> Tuple[List[str], Optional[str]]:
+    """Warning suppressions and elaboration top parsed from the task's eval Makefile."""
+    makefile = task_verification_dir(task) / "Makefile"
+    if not makefile.exists():
+        return [], None
+    text = makefile.read_text(encoding="utf-8", errors="ignore")
+    wno_flags = list(dict.fromkeys(re.findall(r"-Wno-[A-Z0-9]+", text)))
+    top_match = re.search(r"--top(?:-module)?\s+([A-Za-z_]\w*)", text)
+    return wno_flags, top_match.group(1) if top_match else None
+
+
+def testbench_dut_instantiation(task: RealBenchTask) -> str:
+    """The testbench's instantiation of the candidate module, verbatim. This is
+    the binding port contract: every connected pin must exist on the module."""
+    template_dir = task_verification_dir(task)
+    if not template_dir.exists():
+        return ""
+    for path in sorted([*template_dir.glob("*testbench*.sv"), *template_dir.glob("*testbench*.v")]):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        match = re.search(rf"(?m)^[ \t]*{re.escape(task.top_module)}\s+[A-Za-z_]\w*\s*\(", text)
+        if not match:
+            continue
+        depth = 0
+        for index in range(match.end() - 1, len(text)):
+            char = text[index]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    semicolon = text.find(";", index)
+                    end = semicolon + 1 if semicolon != -1 else index + 1
+                    return text[match.start() : end]
+    return ""
+
+
+def template_provided_module_names(task: RealBenchTask) -> List[str]:
+    """All module names declared by template files other than the candidate slot.
+    Generated code must never re-declare any of them (fatal MODDUP at eval)."""
+    template_dir = task_verification_dir(task)
+    if not template_dir.exists():
+        return []
+    top_filename = f"{task.task}_top.sv"
+    names: set[str] = set()
+    for path in sorted([*template_dir.glob("*.v"), *template_dir.glob("*.sv")]):
+        if path.name == top_filename:
+            continue
+        names.update(MODULE_DECL_RE.findall(path.read_text(encoding="utf-8", errors="ignore")))
+    names.discard(task.top_module)
+    return sorted(names)
+
+
 def build_environment_notes(
     task: RealBenchTask,
     provided_signatures: Dict[str, str],
     inline_signatures: Dict[str, str],
+    args: argparse.Namespace,
 ) -> List[str]:
     notes: List[str] = []
+    instantiation = testbench_dut_instantiation(task)
+    if instantiation:
+        notes.append(
+            f"The verification testbench instantiates {task.top_module} exactly as shown below. Your module "
+            "must declare every port connected here, with these exact names (a missing port is a fatal "
+            "PINNOTFOUND elaboration error). Ports inside `ifdef blocks are required whenever the compile "
+            "environment defines that macro:\n"
+            + clip_text(instantiation, args.testbench_contract_max_chars)
+        )
     defines = template_defines_files(task)
     if defines:
         names = ", ".join(path.name for path in defines)
@@ -1170,6 +1635,35 @@ def summarize(records: Sequence[Dict[str, Any]], tasks: Sequence[RealBenchTask],
         "function_rate": safe_rate(sum(1 for record in records if record.get("function") == 1), total),
         "pass_rate": safe_rate(sum(1 for record in records if record.get("passed")), total),
         "total_s": elapsed_s,
+        **rag_aggregates(records),
+    }
+
+
+def rag_aggregates(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """Cross-record retrieval/cache aggregates for before-vs-after run comparison."""
+    repair = [record.get("repair_cache_metrics") or {} for record in records]
+    lookups = sum(metrics.get("lookups", 0) for metrics in repair if metrics.get("enabled"))
+    hits = sum(metrics.get("hits", 0) for metrics in repair if metrics.get("enabled"))
+    retrieval = [record.get("retrieval_metrics") or {} for record in records]
+    searches = sum(metrics.get("searches", 0) for metrics in retrieval)
+    low_confidence = sum(metrics.get("low_confidence_searches", 0) for metrics in retrieval)
+    attempts = [
+        int(record["legacy_repair_attempts"])
+        for record in records
+        if record.get("legacy_repair_attempts") is not None
+    ]
+    walls = [float(record.get("wall_s") or 0.0) for record in records]
+    tokens = [record.get("llm_token_estimate") or {} for record in records]
+    total_tokens = sum(item.get("prompt_tokens", 0) + item.get("response_tokens", 0) for item in tokens)
+    return {
+        "repair_cache_lookups": lookups,
+        "repair_cache_hits": hits,
+        "repair_cache_hit_rate": safe_rate(hits, lookups),
+        "mean_repair_attempts": (sum(attempts) / len(attempts)) if attempts else None,
+        "mean_wall_s": (sum(walls) / len(walls)) if walls else None,
+        "total_estimated_tokens": total_tokens or None,
+        "retrieval_searches": searches,
+        "low_confidence_search_rate": safe_rate(low_confidence, searches),
     }
 
 
@@ -1204,11 +1698,13 @@ def run_realbench(args: argparse.Namespace) -> Dict[str, Any]:
 
     items = work_items(tasks, args.samples)
     if args.dry_run:
+        rag = RagRuntime(repair_cache_scope=args.repair_cache)
         records = [dry_run_record(item, catalogs[item.task.task_id], output_dir) for item in items]
     else:
+        rag = build_rag_runtime(args, output_dir, tasks, catalogs)
         records = []
         with ThreadPoolExecutor(max_workers=max(args.concurrency, 1)) as executor:
-            futures = [executor.submit(run_one, item, args, output_dir, catalogs) for item in items]
+            futures = [executor.submit(run_one, item, args, output_dir, catalogs, rag) for item in items]
             for future in as_completed(futures):
                 record = future.result()
                 records.append(record)
@@ -1225,6 +1721,15 @@ def run_realbench(args: argparse.Namespace) -> Dict[str, Any]:
     if args.dry_run:
         summary["dry_run"] = True
     (output_dir / "summary.json").write_text(dumps_json(summary, indent=2), encoding="utf-8")
+    rag_metrics = {
+        "planner_search_mode": args.planner_search_mode,
+        "embedder": rag.embedder_name,
+        "repair_cache_scope": args.repair_cache,
+        **rag_aggregates(records),
+    }
+    if rag.repair_caches:
+        rag_metrics["repair_cache_stats"] = {key: cache.stats() for key, cache in rag.repair_caches.items()}
+    (output_dir / "rag_metrics.json").write_text(dumps_json(rag_metrics, indent=2), encoding="utf-8")
     print(f"[realbench] wrote results under {output_dir}")
     return summary
 

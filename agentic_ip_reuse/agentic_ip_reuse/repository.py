@@ -22,7 +22,7 @@ class JsonIpRepository:
         candidates: List[IpCandidate] = []
         for description in self._descriptions.values():
             candidate = description.candidate
-            if not _matches_filters(candidate, filters):
+            if not matches_filters(candidate, filters):
                 continue
             haystack = _tokens(" ".join(_candidate_text(candidate)))
             overlap = len(query_tokens & haystack)
@@ -126,7 +126,7 @@ def _candidate_text(candidate: IpCandidate) -> Iterable[str]:
     yield " ".join(candidate.criteria.values())
 
 
-def _matches_filters(candidate: IpCandidate, filters: Dict[str, Any]) -> bool:
+def matches_filters(candidate: IpCandidate, filters: Dict[str, Any]) -> bool:
     category = filters.get("category")
     if category and str(category).lower() != candidate.category.lower():
         return False

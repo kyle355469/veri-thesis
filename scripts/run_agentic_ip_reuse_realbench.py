@@ -24,7 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from agentic_ip_reuse.agent import AgenticIpReuseAgent, AgenticIpReuseConfig, dumps_result
+from ip_reuse_legacy.agent import AgenticIpReuseAgent, AgenticIpReuseConfig, dumps_result
 from rag_rtl.embeddings import encode_texts, make_embedder
 from rag_rtl.json_utils import dumps_json
 from rag_rtl.llm import VllmClient, extract_code

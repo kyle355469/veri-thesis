@@ -101,7 +101,10 @@ class AgentTests(unittest.TestCase):
             result = agent.run(DesignTask(prompt="Build stream design"))
 
             self.assertEqual(result.stopped_reason, "forced_final")
-            self.assertEqual(client.calls[-1]["tool_choice"], "none")
+            # The forced-final request must not attach tools: the deployed
+            # reasoning parser returns empty content when tools are present.
+            self.assertIsNone(client.calls[-1]["tools"])
+            self.assertIsNone(client.calls[-1]["tool_choice"])
             self.assertIn("requirements", result.structured_plan)
 
 

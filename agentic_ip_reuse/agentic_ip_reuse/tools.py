@@ -197,7 +197,21 @@ class AgentToolExecutor:
 
     def search_reuse_ip(self, query: str, filters: Optional[Dict[str, Any]] = None, top_k: int = 5) -> Dict[str, Any]:
         candidates = self.repository.search(query=query, filters=filters, top_k=top_k)
-        return {"ok": True, "tool": "search_reuse_ip", "query": query, "candidates": [asdict(item) for item in candidates]}
+        payload: Dict[str, Any] = {
+            "ok": True,
+            "tool": "search_reuse_ip",
+            "query": query,
+            "candidates": [asdict(item) for item in candidates],
+        }
+        trace = getattr(self.repository, "pop_last_trace", lambda: None)()
+        if trace is not None:
+            payload["retrieval"] = trace
+            if trace.get("low_confidence"):
+                payload["note"] = (
+                    "No catalog entry exceeded the similarity threshold; these are weak matches. "
+                    "Prefer marking the module as new RTL rather than forcing reuse."
+                )
+        return payload
 
     def inspect_reuse_ip(self, ip_id: str) -> Dict[str, Any]:
         return {"ok": True, "tool": "inspect_reuse_ip", "description": asdict(self.repository.inspect(ip_id))}

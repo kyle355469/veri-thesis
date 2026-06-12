@@ -580,3 +580,22 @@ python3 -m rag_rtl.cli evaluate \
 ```
 
 Supported modes are `llm_only`, `rag`, and `rag_cache_verify`. The semantic cache uses LLM keyword prefiltering by default, so cosine similarity is computed only for keyword-matched history entries; pass `--cache-mode direct` to evaluate direct cosine matching over the full cache, or `--cache-mode none` to skip history similarity and avoid saving successful generations.
+
+## RAG + Semantic Repair Cache for the Two-Stage RealBench Pipeline
+
+`scripts/run_agentic_plan_legacy_realbench.py` can augment both stages with retrieval and caching. All flags default to the legacy behavior (token-overlap IP search, no cache), so existing runs stay reproducible.
+
+- `--planner-search-mode {token,semantic,hybrid}`: backend for the planner's `search_reuse_ip` tool. `semantic` embeds the per-task catalog (the task's own dependency sources only — never cross-task data, so no benchmark contamination) and retrieves by cosine similarity with a lexical rerank; `hybrid` tops semantic results up with token matches.
+- `--embedder {auto,hash,<st-model>}`: `auto` uses sentence-transformers MiniLM and falls back to the dependency-free hashing embedder with a warning when it is not installed. The resolved embedder is stamped into `index_meta.json` and every record. Hash cosines run lower than MiniLM's, so lower `--planner-retrieval-min-score` when on the fallback.
+- `--planner-retrieval-min-score` / `--planner-retrieval-below-threshold {flag,drop}`: below-threshold candidates are tagged `retrieval_confidence: low` (or dropped), and an all-weak search adds an explicit note to the tool payload telling the planner to prefer new RTL over forced reuse — weak retrievals never read as confident matches.
+- Per-task vector indexes persist under `catalogs/{task_id}.index/` and are rebuilt only when the catalog hash or embedder changes (or `--reindex`), so `--resume` reruns never re-embed.
+- `--repair-cache {off,task,run}`: semantic cache of verified Verilator-diagnostic→fix pairs (`repair_cache.json`, or `repair_cache/{task_id}.json` for task scope). Keys are identifier/path-stripped diagnostic signatures gated by error code (PINNOTFOUND, MODDUP, ...); values are unified-diff excerpts of the model's own repairs that subsequently PASSED verification — never benchmark reference RTL, and never auto-applied: above `--repair-cache-evidence-threshold` they are injected into the repair prompt as advisory guidance only.
+
+### Speedup measurement protocol
+
+1. Baseline: run with defaults (`--planner-search-mode token`, `--repair-cache off`) into one output dir.
+2. Treatment: same tasks/model/temperature with `--planner-search-mode hybrid --repair-cache run` into another output dir.
+3. Warm cache: re-run the treatment reusing the persisted `repair_cache.json` and `.index/` dirs (with `--resume` removed but indexes intact) to measure steady-state speedup.
+4. Compare `records.jsonl` / `summary.json` / `rag_metrics.json` on: `pass_rate`, `mean_repair_attempts`, `mean_wall_s`, `total_estimated_tokens`, `repair_cache_hit_rate`, and `low_confidence_search_rate`.
+
+Caveat: with `--samples > 1`, the run-scoped cache shares hints across samples of one task, weakening sample independence for pass@k — use `--repair-cache task` for pass@k experiments.

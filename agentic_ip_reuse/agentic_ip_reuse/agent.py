@@ -18,6 +18,15 @@ class AgentConfig:
     max_tokens: int = 8192
     tool_choice: Any = "auto"
     max_steps: int = 16
+    max_final_nudges: int = 2
+
+
+_FINAL_NUDGE_PROMPT = (
+    "Your previous reply was working notes, not a result. Continue now and do one of these two things: "
+    "either call one of the available tools, or return the complete final plan as a single JSON object "
+    "with keys requirements, modules, reuse_decisions, integration_plan, verification_plan, debug_plan, "
+    "unresolved_assumptions. Do not reply with notes or partial reasoning again."
+)
 
 
 @dataclass
@@ -37,6 +46,7 @@ class AgenticIpReuseAgent:
         stopped_reason = "max_steps"
         used_tools = False
         step_count = 0
+        nudges_used = 0
         events.append(AgentEvent("agent_start", 0, "agent started"))
 
         for step in range(1, self.config.max_steps + 1):
@@ -51,9 +61,32 @@ class AgenticIpReuseAgent:
             )
             tool_calls = message.get("tool_calls") or []
             if not tool_calls:
-                final_text = message.get("content") or ""
-                stopped_reason = "final"
-                events.append(AgentEvent("model_final", step, f"model returned final plan: {preview_text(final_text)}"))
+                candidate_text = message.get("content") or ""
+                if _has_plan_payload(candidate_text):
+                    final_text = candidate_text
+                    stopped_reason = "final"
+                    events.append(AgentEvent("model_final", step, f"model returned final plan: {preview_text(final_text)}"))
+                    break
+                # Reasoning-model deployments often stop after emitting working
+                # notes (empty content promoted from reasoning_content) without
+                # calling a tool or producing the plan. Push back instead of
+                # accepting the notes as a final answer.
+                if nudges_used < self.config.max_final_nudges and step < self.config.max_steps:
+                    nudges_used += 1
+                    events.append(
+                        AgentEvent(
+                            "final_nudge",
+                            step,
+                            f"reply had no tool calls and no parseable plan; nudging ({nudges_used}/{self.config.max_final_nudges}): {preview_text(candidate_text)}",
+                        )
+                    )
+                    if candidate_text.strip():
+                        messages.append({"role": "assistant", "content": candidate_text})
+                    messages.append({"role": "user", "content": _FINAL_NUDGE_PROMPT})
+                    continue
+                final_text = candidate_text
+                stopped_reason = "final_unparsed"
+                events.append(AgentEvent("model_final", step, f"model returned unparsed final text: {preview_text(final_text)}"))
                 break
 
             used_tools = True
@@ -91,16 +124,18 @@ class AgenticIpReuseAgent:
                     }
                 )
 
-        if not final_text:
-            final_text = self._force_final(messages)
-            stopped_reason = "forced_final"
-            events.append(
-                AgentEvent(
-                    "forced_final",
-                    step_count,
-                    f"forced final plan (empty response or tool budget exhausted): {preview_text(final_text)}",
+        if not final_text or not _has_plan_payload(final_text):
+            forced_text = self._force_final(messages)
+            if _has_plan_payload(forced_text) or not final_text:
+                final_text = forced_text
+                stopped_reason = "forced_final"
+                events.append(
+                    AgentEvent(
+                        "forced_final",
+                        step_count,
+                        f"forced final plan (unparsed response or tool budget exhausted): {preview_text(final_text)}",
+                    )
                 )
-            )
 
         structured_plan = _parse_final_plan(final_text)
         artifact_paths = write_standard_artifacts(structured_plan, self.tool_executor.output_dir)
@@ -122,13 +157,12 @@ class AgenticIpReuseAgent:
                 "content": "Tool-call budget is exhausted. Return the best complete IP-reuse design plan as one JSON object now.",
             }
         ]
+        # No tools attached: the deployed reasoning parser tends to return empty
+        # content (answer trapped in reasoning_content) when tools are present.
         message = self.llm_client.chat(
             forced_messages,
             temperature=min(self.config.temperature, 0.1),
             max_tokens=self.config.max_tokens,
-            tools=self.tool_schemas,
-            tool_choice="none",
-            parallel_tool_calls=False,
         )
         return message.get("content") or "{}"
 
@@ -174,6 +208,20 @@ _PLAN_KEYS = {
     "debug_plan",
     "unresolved_assumptions",
 }
+
+
+def _has_plan_payload(text: str) -> bool:
+    """True when the text contains a JSON object carrying at least one plan key,
+    i.e. it would parse as a real plan rather than the unparsed-text fallback."""
+    if not text.strip():
+        return False
+    for candidate in _plan_json_candidates(text):
+        parsed = _parse_json_object(candidate)
+        if not parsed or "error" in parsed or "value" in parsed:
+            continue
+        if _PLAN_KEYS & set(parsed):
+            return True
+    return False
 
 
 def _parse_final_plan(text: str) -> Dict[str, Any]:

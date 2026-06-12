@@ -77,15 +77,43 @@ class VllmClient:
         if parallel_tool_calls is not None:
             payload["parallel_tool_calls"] = parallel_tool_calls
         body = self._post_chat_completion(payload)
-        return body["choices"][0]["message"]
+        choice = body["choices"][0]
+        message = choice["message"]
+        # Reasoning-parser deployments can leave "content" empty while the text
+        # sits in "reasoning_content". Promote it so callers can recover, but mark
+        # it: the promoted text is usually working notes, not a final answer.
+        if not (message.get("content") or "").strip() and not message.get("tool_calls"):
+            reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+            if str(reasoning).strip():
+                message = dict(message)
+                message["content"] = str(reasoning)
+                message["_content_from_reasoning"] = True
+        message["_finish_reason"] = choice.get("finish_reason")
+        return message
 
     def complete(self, prompt: str, temperature: float = 0.4, max_tokens: int = 2048) -> str:
-        message = self.chat(
-            [{"role": "user", "content": prompt}],
-            temperature=temperature,
-            max_tokens=max_tokens,
+        messages: List[Dict[str, Any]] = [{"role": "user", "content": prompt}]
+        message = self.chat(messages, temperature=temperature, max_tokens=max_tokens)
+        content = (message.get("content") or "").strip()
+        if content and not message.get("_content_from_reasoning"):
+            return message.get("content") or ""
+        # The reply was empty or reasoning-only working notes: give the model its
+        # notes back and demand the final answer once before giving up.
+        retry_messages = list(messages)
+        if content:
+            retry_messages.append({"role": "assistant", "content": content})
+        retry_messages.append(
+            {
+                "role": "user",
+                "content": "Your previous reply ended before the final answer. Reply now with only the complete final answer.",
+            }
         )
-        return message.get("content") or ""
+        retried = self.chat(retry_messages, temperature=temperature, max_tokens=max_tokens)
+        retried_content = (retried.get("content") or "").strip()
+        if retried_content and not retried.get("_content_from_reasoning"):
+            return retried.get("content") or ""
+        # Last resort: working notes sometimes embed the intended answer.
+        return retried_content or content
 
     def complete_with_tools(
         self,

@@ -183,9 +183,19 @@ def build_repair_prompt(
     original_spec: Optional[str] = None,
     reuse_modules: Optional[Dict[str, str]] = None,
     environment_notes: Optional[Iterable[str]] = None,
+    repair_hints: Optional[List[str]] = None,
 ) -> str:
     plan_json = json.dumps(asdict(plan), default=json_default, indent=2)
     context = _generation_context_sections(original_spec, reuse_modules, environment_notes)
+    hints_section = ""
+    if repair_hints:
+        hint_text = "\n\n".join(hint.strip() for hint in repair_hints if hint.strip())
+        if hint_text:
+            hints_section = (
+                "Guidance from previously verified fixes of similar diagnostics "
+                "(advisory only; adapt the pattern, do not copy unrelated code or module names):\n"
+                f"{hint_text}\n\n"
+            )
     return f"""Repair this integrated {target_hdl} RTL so it passes syntax and lint checks.
 Keep the same IP reuse intent and public top-level behavior.
 Reused modules listed as provided source files must only be instantiated, never re-declared in your output.
@@ -196,7 +206,7 @@ Top module: {top_module or "unknown"}
 {context}IP reuse plan:
 {plan_json}
 
-Diagnostics:
+{hints_section}Diagnostics:
 {json.dumps(diagnostics, default=json_default, indent=2)}
 
 Current RTL:

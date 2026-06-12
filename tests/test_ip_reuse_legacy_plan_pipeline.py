@@ -5,8 +5,10 @@ from pathlib import Path
 
 from ip_reuse_legacy.agent import AgenticIpReuseAgent
 from ip_reuse_legacy.cli import build_parser
+from ip_reuse_legacy.config import AgenticIpReuseConfig
 from ip_reuse_legacy.plan_adapter import agentic_plan_from_payload, load_agentic_plan
 from rag_rtl.embeddings import HashingEmbedder
+from rag_rtl.repair_cache import RepairFixCache, RepairHint
 from rag_rtl.retrieval_context import RetrievalContext
 from rag_rtl.types import Diagnostic, VerificationReport
 from rag_rtl.vector_store import VectorStore
@@ -40,6 +42,36 @@ def passing_report():
         lint_passed=True,
         diagnostics=[Diagnostic(tool="stub", passed=True)],
     )
+
+
+def failing_report():
+    return VerificationReport(
+        syntax_passed=False,
+        lint_passed=False,
+        diagnostics=[
+            Diagnostic(
+                tool="verilator",
+                passed=False,
+                stderr="%Error-PINNOTFOUND: t/x.sv:12:5: Pin not found: 'wb_clk_i'",
+            )
+        ],
+    )
+
+
+class StubRepairCache:
+    def __init__(self, hint_text="HINT-FROM-CACHE"):
+        self.hint_text = hint_text
+        self.lookups = []
+        self.records = []
+
+    def lookup_hint(self, signature):
+        self.lookups.append(signature)
+        if self.hint_text is None:
+            return None
+        return RepairHint(text=self.hint_text, score=0.9, decision="evidence")
+
+    def record_fix(self, signature, failing_rtl, repaired_rtl, *, task_id="", attempt=0):
+        self.records.append((signature, failing_rtl, repaired_rtl))
 
 
 def empty_retrieval_context():
@@ -123,6 +155,117 @@ class LegacyPlanPipelineTests(unittest.TestCase):
         self.assertIn("Generate integrated", llm.prompts[0])
         self.assertNotIn("Extract system-level requirements", llm.prompts[0])
         self.assertNotIn("Decompose the IC system", llm.prompts[0])
+
+    def test_repair_hint_injected_and_verified_fix_recorded(self):
+        plan = agentic_plan_from_payload(sample_agentic_payload())
+        llm = FakeLlm(
+            [
+                "```verilog\nmodule adder(input clk); endmodule\n```",
+                "```verilog\nmodule adder(input wb_clk_i); endmodule\n```",
+            ]
+        )
+        cache = StubRepairCache()
+        agent = AgenticIpReuseAgent(
+            llm,
+            empty_retrieval_context(),
+            SequenceVerifier([failing_report(), passing_report()]),
+            repair_cache=cache,
+        )
+
+        result = agent.run_from_plan(plan, top_module="adder")
+
+        self.assertTrue(result.verification.passed)
+        self.assertIn("HINT-FROM-CACHE", llm.prompts[1])
+        self.assertIn("advisory only", llm.prompts[1])
+        self.assertEqual(len(cache.records), 1)
+        self.assertIn("PINNOTFOUND", cache.records[0][0].error_codes)
+        events = [event["event"] for event in result.repair_cache_events]
+        self.assertEqual(events, ["lookup", "record"])
+        self.assertTrue(result.repair_cache_events[0]["injected"])
+
+    def test_failed_repair_never_recorded(self):
+        plan = agentic_plan_from_payload(sample_agentic_payload())
+        llm = FakeLlm(
+            [
+                "```verilog\nmodule adder(); endmodule\n```",
+                "```verilog\nmodule adder(); endmodule\n```",
+            ]
+        )
+        cache = StubRepairCache(hint_text=None)
+        agent = AgenticIpReuseAgent(
+            llm,
+            empty_retrieval_context(),
+            SequenceVerifier([failing_report(), failing_report()]),
+            config=AgenticIpReuseConfig(max_repair_attempts=1),
+            repair_cache=cache,
+        )
+
+        result = agent.run_from_plan(plan, top_module="adder")
+
+        self.assertFalse(result.verification.passed)
+        self.assertEqual(cache.records, [])
+        self.assertEqual([event["event"] for event in result.repair_cache_events], ["lookup"])
+        self.assertFalse(result.repair_cache_events[0]["injected"])
+
+    def test_no_cache_and_cache_miss_produce_identical_repair_prompts(self):
+        def repair_prompt_for(cache):
+            plan = agentic_plan_from_payload(sample_agentic_payload())
+            llm = FakeLlm(
+                [
+                    "```verilog\nmodule adder(); endmodule\n```",
+                    "```verilog\nmodule adder(input wb_clk_i); endmodule\n```",
+                ]
+            )
+            agent = AgenticIpReuseAgent(
+                llm,
+                empty_retrieval_context(),
+                SequenceVerifier([failing_report(), passing_report()]),
+                repair_cache=cache,
+            )
+            agent.run_from_plan(plan, top_module="adder")
+            return llm.prompts[1]
+
+        self.assertEqual(repair_prompt_for(None), repair_prompt_for(StubRepairCache(hint_text=None)))
+
+    def test_real_repair_cache_round_trips_between_agents(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = RepairFixCache(
+                embedder=HashingEmbedder(dim=256),
+                path=Path(tmp) / "repair_cache.json",
+                evidence_threshold=0.5,
+            )
+            plan = agentic_plan_from_payload(sample_agentic_payload())
+            first_llm = FakeLlm(
+                [
+                    "```verilog\nmodule adder(input clk); endmodule\n```",
+                    "```verilog\nmodule adder(input wb_clk_i); endmodule\n```",
+                ]
+            )
+            first_agent = AgenticIpReuseAgent(
+                first_llm,
+                empty_retrieval_context(),
+                SequenceVerifier([failing_report(), passing_report()]),
+                repair_cache=cache,
+            )
+            first_agent.run_from_plan(plan, top_module="adder")
+
+            second_llm = FakeLlm(
+                [
+                    "```verilog\nmodule adder(input clk); endmodule\n```",
+                    "```verilog\nmodule adder(input wb_clk_i); endmodule\n```",
+                ]
+            )
+            second_agent = AgenticIpReuseAgent(
+                second_llm,
+                empty_retrieval_context(),
+                SequenceVerifier([failing_report(), passing_report()]),
+                repair_cache=cache,
+            )
+            result = second_agent.run_from_plan(plan, top_module="adder")
+
+        self.assertIn("Previously verified fix", second_llm.prompts[1])
+        self.assertIn("wb_clk_i", second_llm.prompts[1])
+        self.assertTrue(result.repair_cache_events[0]["injected"])
 
     def test_load_agentic_plan_accepts_agent_result_json_shape(self):
         with tempfile.TemporaryDirectory() as tmp:
