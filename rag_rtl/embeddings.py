@@ -44,8 +44,8 @@ class SentenceTransformerEmbedder:
     def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
         from sentence_transformers import SentenceTransformer
 
-        self.model = SentenceTransformer(model_name)
-        self.dim = int(self.model.get_sentence_embedding_dimension())
+        self.model = SentenceTransformer(model_name, device="cpu")
+        self.dim = int(self.model.get_embedding_dimension())
 
     def encode(self, texts: Iterable[str]) -> np.ndarray:
         vectors = self.model.encode(list(texts), normalize_embeddings=True)

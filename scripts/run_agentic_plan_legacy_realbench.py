@@ -238,7 +238,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--planner-max-tokens", type=int, default=100000)
     parser.add_argument("--planner-max-steps", type=int, default=16)
     parser.add_argument("--planner-tool-choice", default="auto")
-    parser.add_argument("--target-hdl", default="systemverilog")
+    parser.add_argument("--target-hdl", default="verilog")
     parser.add_argument(
         "--planner-search-mode",
         choices=["token", "semantic", "hybrid"],
@@ -255,7 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--planner-retrieval-min-score",
         type=float,
-        default=0.30,
+        default=0.70,
         help="Rerank-score floor for semantic IP search; results below it are flagged or dropped "
         "so weak retrievals never read as confident matches.",
     )

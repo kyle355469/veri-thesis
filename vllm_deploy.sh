@@ -22,7 +22,7 @@ fi
 if [ -z "${TENSOR_PARALLEL_SIZE:-}" ]; then
   case "$MODEL" in
     Qwen/Qwen3-4B-Thinking-2507-FP8) TENSOR_PARALLEL_SIZE=4 ;;
-    *) TENSOR_PARALLEL_SIZE=4 ;;
+    *) TENSOR_PARALLEL_SIZE=8 ;;
   esac
 fi
 
@@ -68,6 +68,7 @@ vllm serve "$MODEL" \
   --served-model-name "$SERVED_NAME" \
   --host "$HOST" \
   --port "$PORT" \
+  --tensor_parallel_size "$TENSOR_PARALLEL_SIZE" \
   --dtype "$DTYPE" \
   --trust-remote-code \
   --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \

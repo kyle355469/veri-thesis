@@ -179,7 +179,7 @@ export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
 DTYPE="${DTYPE:-auto}"
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.93}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
-TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
+TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-8}"
 CHAT_TEMPLATE="${CHAT_TEMPLATE:-}"
 
 tunnel_target_host() {
@@ -207,7 +207,7 @@ check_local_port_free() {
 wait_for_http() {
   local url="$1"
   local timeout_s="$2"
-  python3 - "$url" "$timeout_s" <<'PY'
+  python3 - "$url" "$timeout_s" "$VLLM_API_KEY" <<'PY'
 import json
 import sys
 import time
@@ -216,11 +216,15 @@ import urllib.request
 
 url = sys.argv[1].rstrip("/") + "/models"
 deadline = time.time() + int(sys.argv[2])
+api_key = sys.argv[3]
 last_error = ""
 
 while time.time() < deadline:
     try:
-        with urllib.request.urlopen(url, timeout=5) as response:
+        request = urllib.request.Request(url)
+        if api_key:
+            request.add_header("Authorization", f"Bearer {api_key}")
+        with urllib.request.urlopen(request, timeout=5) as response:
             payload = json.loads(response.read().decode("utf-8"))
         names = [item.get("id") for item in payload.get("data", []) if item.get("id")]
         print("ready models: " + (", ".join(names) if names else "<none listed>"))
@@ -455,21 +459,24 @@ else
   echo "Attaching to remote vLLM on ${target_host}:${REMOTE_PORT}..."
 fi
 
-python3 - "$target_host" "$REMOTE_PORT" "$READY_TIMEOUT_S" <<'PY'
+python3 - "$target_host" "$REMOTE_PORT" "$READY_TIMEOUT_S" "$VLLM_API_KEY" <<'PY'
 import json
 import sys
 import time
 import urllib.error
 import urllib.request
 
-host, port, timeout_s = sys.argv[1], sys.argv[2], int(sys.argv[3])
+host, port, timeout_s, api_key = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 url = f"http://{host}:{port}/v1/models"
 deadline = time.time() + timeout_s
 last_error = ""
 
 while time.time() < deadline:
     try:
-        with urllib.request.urlopen(url, timeout=5) as response:
+        request = urllib.request.Request(url)
+        if api_key:
+            request.add_header("Authorization", f"Bearer {api_key}")
+        with urllib.request.urlopen(request, timeout=5) as response:
             payload = json.loads(response.read().decode("utf-8"))
         names = [item.get("id") for item in payload.get("data", []) if item.get("id")]
         print("ready models: " + (", ".join(names) if names else "<none listed>"))
