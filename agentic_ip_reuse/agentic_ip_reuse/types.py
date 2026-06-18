@@ -116,6 +116,7 @@ class AgentResult:
     steps: int = 0
     used_tools: bool = False
     stopped_reason: str = "final"
+    grounding: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -126,6 +127,7 @@ class AgentResult:
             "steps": self.steps,
             "used_tools": self.used_tools,
             "stopped_reason": self.stopped_reason,
+            "grounding": self.grounding,
         }
 
 

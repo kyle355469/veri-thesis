@@ -240,6 +240,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--planner-tool-choice", default="auto")
     parser.add_argument("--target-hdl", default="verilog")
     parser.add_argument(
+        "--no-planner-inject-catalog",
+        dest="planner_inject_catalog",
+        action="store_false",
+        help="Disable injecting the task catalog (real ip_id vocabulary) into the planner prompt.",
+    )
+    parser.add_argument(
+        "--no-planner-ground-reuse",
+        dest="planner_ground_reuse",
+        action="store_false",
+        help="Disable closed-vocabulary grounding of plan reuse decisions against the catalog.",
+    )
+    parser.add_argument(
+        "--no-planner-completeness-gate",
+        dest="planner_completeness_gate",
+        action="store_false",
+        help="Disable the one-shot re-prompt when a plan is missing reuse/integration sections.",
+    )
+    parser.add_argument("--planner-max-catalog-entries", type=int, default=60)
+    parser.set_defaults(planner_inject_catalog=True, planner_ground_reuse=True, planner_completeness_gate=True)
+    parser.add_argument(
         "--planner-search-mode",
         choices=["token", "semantic", "hybrid"],
         default="token",
@@ -788,6 +808,10 @@ def run_planner(
             max_tokens=args.planner_max_tokens,
             tool_choice=args.planner_tool_choice,
             max_steps=args.planner_max_steps,
+            inject_catalog=args.planner_inject_catalog,
+            ground_reuse_decisions=args.planner_ground_reuse,
+            completeness_gate=args.planner_completeness_gate,
+            max_catalog_entries=args.planner_max_catalog_entries,
         ),
     )
     return agent.run(

@@ -91,6 +91,9 @@ class SemanticIpRepository:
         )
         return candidates
 
+    def list_candidates(self) -> List[IpCandidate]:
+        return self.inner.list_candidates()
+
     def pop_last_trace(self) -> Optional[Dict[str, Any]]:
         return self.traces[-1].to_dict() if self.traces else None
 

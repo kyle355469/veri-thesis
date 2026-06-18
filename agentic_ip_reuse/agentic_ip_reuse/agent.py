@@ -6,8 +6,9 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
 from .artifacts import write_standard_artifacts
+from .grounding import completeness_gaps, completeness_score, ground_reuse_decisions
 from .json_utils import json_default, preview_text
-from .prompts import build_system_prompt, build_user_prompt
+from .prompts import build_catalog_digest, build_system_prompt, build_user_prompt, catalog_identifiers
 from .tools import AgentToolExecutor, TOOL_SCHEMAS
 from .types import AgentEvent, AgentResult, DesignTask
 
@@ -19,6 +20,10 @@ class AgentConfig:
     tool_choice: Any = "auto"
     max_steps: int = 16
     max_final_nudges: int = 2
+    inject_catalog: bool = True
+    ground_reuse_decisions: bool = True
+    completeness_gate: bool = True
+    max_catalog_entries: int = 60
 
 
 _FINAL_NUDGE_PROMPT = (
@@ -27,6 +32,22 @@ _FINAL_NUDGE_PROMPT = (
     "with keys requirements, modules, reuse_decisions, integration_plan, verification_plan, debug_plan, "
     "unresolved_assumptions. Do not reply with notes or partial reasoning again."
 )
+
+
+def _completeness_prompt(gaps: Sequence[str], catalog_digest: str) -> str:
+    parts = [
+        "Your plan is missing required sections: " + ", ".join(gaps) + ".",
+        "Return the COMPLETE plan again as one JSON object (all keys), this time filling those sections.",
+    ]
+    if "reuse_decisions" in gaps or "integration_plan" in gaps:
+        parts.append(
+            "For every catalog IP that fits a module, add a reuse_decisions entry "
+            '{"module_name": ..., "selected_ip": <exact ip_id from the catalog>, "new_rtl_required": false}, '
+            "and add an integration_plan step describing how each selected IP is instantiated and connected."
+        )
+        if catalog_digest:
+            parts.append(catalog_digest)
+    return "\n\n".join(parts)
 
 
 @dataclass
@@ -38,9 +59,16 @@ class AgenticIpReuseAgent:
 
     def run(self, task: DesignTask) -> AgentResult:
         events: List[AgentEvent] = []
+        catalog_candidates = self._catalog_candidates()
+        catalog_ids = catalog_identifiers(catalog_candidates)
+        catalog_digest = (
+            build_catalog_digest(catalog_candidates, self.config.max_catalog_entries)
+            if self.config.inject_catalog
+            else ""
+        )
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": build_system_prompt()},
-            {"role": "user", "content": build_user_prompt(task)},
+            {"role": "user", "content": build_user_prompt(task, catalog_digest)},
         ]
         final_text = ""
         stopped_reason = "max_steps"
@@ -138,6 +166,39 @@ class AgenticIpReuseAgent:
                 )
 
         structured_plan = _parse_final_plan(final_text)
+
+        # Completeness gate (#3): if the task has reuse candidates but the plan
+        # came back missing reuse/integration sections, re-prompt once and keep
+        # whichever attempt is more complete.
+        has_catalog = bool(catalog_ids)
+        if self.config.completeness_gate:
+            gaps = completeness_gaps(structured_plan, has_catalog)
+            if gaps:
+                events.append(AgentEvent("completeness_gap", step_count, f"plan missing: {', '.join(gaps)}; re-prompting once"))
+                retry_text = self._request_completion(messages, gaps, catalog_digest)
+                retry_plan = _parse_final_plan(retry_text)
+                if completeness_score(retry_plan) > completeness_score(structured_plan):
+                    structured_plan = retry_plan
+                    final_text = retry_text
+                    stopped_reason = "completed"
+                    events.append(AgentEvent("completeness_filled", step_count, "re-prompt produced a more complete plan"))
+
+        # Closed-vocabulary grounding (#2): force every selected_ip to a real
+        # catalog ip_id (remap near-misses, drop hallucinations).
+        grounding: Dict[str, Any] = {}
+        if self.config.ground_reuse_decisions and has_catalog:
+            structured_plan, grounding = ground_reuse_decisions(structured_plan, catalog_ids)
+            if grounding.get("remapped") or grounding.get("dropped"):
+                events.append(
+                    AgentEvent(
+                        "reuse_grounded",
+                        -1,
+                        f"grounded reuse decisions: {grounding['exact']} exact, "
+                        f"{grounding['remapped']} remapped, {grounding['dropped']} dropped",
+                        data=grounding,
+                    )
+                )
+
         artifact_paths = write_standard_artifacts(structured_plan, self.tool_executor.output_dir)
         events.append(AgentEvent("artifacts_written", -1, f"wrote {len(artifact_paths)} standard artifacts", data=artifact_paths))
         return AgentResult(
@@ -148,7 +209,30 @@ class AgenticIpReuseAgent:
             steps=step_count,
             used_tools=used_tools,
             stopped_reason=stopped_reason,
+            grounding=grounding,
         )
+
+    def _catalog_candidates(self) -> List[Any]:
+        lister = getattr(self.tool_executor.repository, "list_candidates", None)
+        if not callable(lister):
+            return []
+        try:
+            return list(lister())
+        except Exception:  # noqa: BLE001 - catalog injection is best-effort.
+            return []
+
+    def _request_completion(self, messages: List[Dict[str, Any]], gaps: Sequence[str], catalog_digest: str) -> str:
+        # No tools attached: the deployed reasoning parser returns empty content
+        # when tools are present, and we only need a JSON plan back here.
+        retry_messages = list(messages) + [
+            {"role": "user", "content": _completeness_prompt(gaps, catalog_digest)}
+        ]
+        message = self.llm_client.chat(
+            retry_messages,
+            temperature=min(self.config.temperature, 0.1),
+            max_tokens=self.config.max_tokens,
+        )
+        return message.get("content") or "{}"
 
     def _force_final(self, messages: Sequence[Dict[str, Any]]) -> str:
         forced_messages = list(messages) + [

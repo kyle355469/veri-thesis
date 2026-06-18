@@ -193,6 +193,7 @@ def _selected_ip(raw: Dict[str, Any]) -> Optional[str]:
         or optional_string(raw.get("reuse_ip"))
         or optional_string(raw.get("selected_doc_id"))
         or optional_string(raw.get("ip_id"))
+        or optional_string(raw.get("ip"))
         or optional_string(raw.get("reuse"))
     )
 

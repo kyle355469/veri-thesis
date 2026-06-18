@@ -35,6 +35,12 @@ class JsonIpRepository:
         candidates.sort(key=lambda item: (item.score, item.name), reverse=True)
         return candidates[: max(1, min(int(top_k), 50))]
 
+    def list_candidates(self) -> List[IpCandidate]:
+        """All catalog entries, unfiltered, in catalog order. Used to inject the
+        authoritative IP vocabulary into the planner prompt and to ground the
+        plan's reuse decisions against real ip_ids."""
+        return [IpCandidate(**asdict(description.candidate)) for description in self._descriptions.values()]
+
     def inspect(self, ip_id: str) -> IpDescription:
         try:
             return self._descriptions[ip_id]

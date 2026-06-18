@@ -68,7 +68,6 @@ vllm serve "$MODEL" \
   --served-model-name "$SERVED_NAME" \
   --host "$HOST" \
   --port "$PORT" \
-  --tensor_parallel_size "$TENSOR_PARALLEL_SIZE" \
   --dtype "$DTYPE" \
   --trust-remote-code \
   --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
