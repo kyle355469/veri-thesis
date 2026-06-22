@@ -237,6 +237,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--planner-max-tokens", type=int, default=100000)
     parser.add_argument("--planner-max-steps", type=int, default=16)
+    parser.add_argument(
+        "--planner-enable-tools",
+        dest="planner_enable_tools",
+        action="store_true",
+        help="Enable agentic tool calling in the planner (attach search/inspect tool schemas). "
+        "Off by default: the deployed reasoning model calls 0 tools and attaching them triggers "
+        "its empty-content bug; catalog injection + grounding cover reuse selection instead.",
+    )
+    parser.set_defaults(planner_enable_tools=False)
     parser.add_argument("--planner-tool-choice", default="auto")
     parser.add_argument("--target-hdl", default="verilog")
     parser.add_argument(
@@ -806,6 +815,7 @@ def run_planner(
         config=AgentConfig(
             temperature=args.temperature,
             max_tokens=args.planner_max_tokens,
+            use_tools=args.planner_enable_tools,
             tool_choice=args.planner_tool_choice,
             max_steps=args.planner_max_steps,
             inject_catalog=args.planner_inject_catalog,

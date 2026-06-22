@@ -47,6 +47,14 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--llm-timeout-s", type=int, default=3000)
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--max-tokens", type=int, default=100000)
+    parser.add_argument(
+        "--enable-tools",
+        dest="enable_tools",
+        action="store_true",
+        help="Enable agentic tool calling (attach the search/inspect tool schemas). Off by default; "
+        "the reasoning deployment never tool-calls and attaching tools triggers its empty-content bug.",
+    )
+    parser.set_defaults(enable_tools=False)
     parser.add_argument("--tool-choice", default="auto")
     parser.add_argument("--max-steps", type=int, default=16)
     parser.add_argument("--hierarchical", action="store_true", help="Enable recursive hierarchical module decomposition")
@@ -61,6 +69,7 @@ def cmd_run(args: argparse.Namespace) -> AgentResult:
     agent_config = AgentConfig(
         temperature=args.temperature,
         max_tokens=args.max_tokens,
+        use_tools=args.enable_tools,
         tool_choice=args.tool_choice,
         max_steps=args.max_steps,
     )

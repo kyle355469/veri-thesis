@@ -61,7 +61,7 @@ class AgentTests(unittest.TestCase):
             agent = AgenticIpReuseAgent(
                 client,
                 AgentToolExecutor(JsonIpRepository(catalog), tmp),
-                AgentConfig(max_steps=3),
+                AgentConfig(max_steps=3, use_tools=True),
             )
 
             result = agent.run(DesignTask(prompt="Build stream design"))
@@ -71,6 +71,35 @@ class AgentTests(unittest.TestCase):
             self.assertIn("requirements", result.artifact_paths)
             self.assertTrue(result.artifact_paths["result"].endswith("result.json"))
             self.assertEqual(client.calls[0]["tool_choice"], "auto")
+
+    def test_tools_not_attached_by_default(self):
+        plan = json.dumps(
+            {
+                "requirements": {"functionality": ["stream data"]},
+                "modules": [{"name": "Buffer", "role": "buffer", "interfaces": ["valid-ready"]}],
+                "reuse_decisions": [],
+                "integration_plan": [],
+                "verification_plan": [],
+                "debug_plan": [],
+                "unresolved_assumptions": [],
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog = f"{tmp}/catalog.json"
+            with open(catalog, "w", encoding="utf-8") as handle:
+                handle.write("""{"ips":[]}""")
+            client = FakeChatClient([{"content": plan}])
+            agent = AgenticIpReuseAgent(
+                client,
+                AgentToolExecutor(JsonIpRepository(catalog), tmp),
+                AgentConfig(max_steps=3),
+            )
+
+            result = agent.run(DesignTask(prompt="Build stream design"))
+
+            self.assertFalse(result.used_tools)
+            self.assertIsNone(client.calls[0]["tools"])
+            self.assertIsNone(client.calls[0]["tool_choice"])
 
     def test_agent_forces_final_after_tool_budget(self):
         with tempfile.TemporaryDirectory() as tmp:

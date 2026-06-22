@@ -17,6 +17,7 @@ from .types import AgentEvent, AgentResult, DesignTask
 class AgentConfig:
     temperature: float = 0.2
     max_tokens: int = 8192
+    use_tools: bool = False
     tool_choice: Any = "auto"
     max_steps: int = 16
     max_final_nudges: int = 2
@@ -79,14 +80,20 @@ class AgenticIpReuseAgent:
 
         for step in range(1, self.config.max_steps + 1):
             step_count = step
-            message = self.llm_client.chat(
-                messages,
-                temperature=self.config.temperature,
-                max_tokens=self.config.max_tokens,
-                tools=self.tool_schemas,
-                tool_choice=self.config.tool_choice,
-                parallel_tool_calls=False,
-            )
+            chat_kwargs: Dict[str, Any] = {
+                "temperature": self.config.temperature,
+                "max_tokens": self.config.max_tokens,
+            }
+            # Agentic tool calling is opt-in: the deployed reasoning parser returns
+            # empty content (answer trapped in reasoning_content) whenever tools are
+            # attached, and across every run the planner calls 0 tools anyway --
+            # catalog injection + grounding replace it. Only attach tools when the
+            # caller explicitly enables them (e.g. for a tool-capable model).
+            if self.config.use_tools:
+                chat_kwargs["tools"] = self.tool_schemas
+                chat_kwargs["tool_choice"] = self.config.tool_choice
+                chat_kwargs["parallel_tool_calls"] = False
+            message = self.llm_client.chat(messages, **chat_kwargs)
             tool_calls = message.get("tool_calls") or []
             if not tool_calls:
                 candidate_text = message.get("content") or ""
