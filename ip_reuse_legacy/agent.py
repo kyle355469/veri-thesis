@@ -37,6 +37,7 @@ from .prompts import (
 from .retrieval import candidate_from_hit
 from .serialization import dumps_result
 from .stages import (
+    FunctionalRepairMixin,
     LargeSpecStagesMixin,
     LlmStagesMixin,
     PartitionStagesMixin,
@@ -53,6 +54,7 @@ from .types import (
 
 
 class AgenticIpReuseAgent(
+    FunctionalRepairMixin,
     LargeSpecStagesMixin,
     RecursiveStagesMixin,
     PartitionStagesMixin,
@@ -69,6 +71,7 @@ class AgenticIpReuseAgent(
         config: Optional[AgenticIpReuseConfig] = None,
         stage_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         repair_cache: Optional[Any] = None,
+        functional_verifier: Optional[Any] = None,
     ) -> None:
         self.llm = llm_client
         self.retrieval_context = retrieval_context
@@ -77,6 +80,10 @@ class AgenticIpReuseAgent(
         self.stage_callback = stage_callback
         # Duck-typed rag_rtl.repair_cache.RepairFixCache: lookup_hint/record_fix.
         self.repair_cache = repair_cache
+        # Duck-typed testbench runner: verify_functional(rtl, top_module) -> report
+        # with function_passed/function_info/syntax_ok. Injected only when the
+        # functional-repair arm is enabled (default off).
+        self.functional_verifier = functional_verifier
         self._live_store: Optional[VectorStore] = None
 
     def run(
@@ -377,15 +384,47 @@ class AgenticIpReuseAgent(
                 repair_cache_events.append(record_event)
                 self._stage("repair_cache", "record", **record_event)
 
+        # Functional (testbench-driven) repair: only fires when the design already
+        # compiles, so the testbench can actually simulate it. Default off; the
+        # functional_verifier is injected only for that experimental arm.
+        functional_repair_attempts = 0
+        functional_repair_events: List[Dict[str, Any]] = []
+        function_info = ""
+        if (
+            self.functional_verifier is not None
+            and self.config.enable_functional_repair
+            and verification.passed
+        ):
+            (
+                rtl,
+                verification,
+                functional_repair_attempts,
+                functional_repair_events,
+                function_info,
+            ) = self._run_functional_repair(
+                rtl,
+                plan,
+                target,
+                top_module,
+                llm_traces,
+                original_spec,
+                reuse_modules,
+                environment_notes,
+                verification,
+            )
+
         result = AgenticIpReuseResult(
             plan=plan,
             rtl=rtl,
             final_text=final_text,
             verification=verification,
             repair_attempts=repair_attempts,
+            functional_repair_attempts=functional_repair_attempts,
+            function_info=function_info,
             llm_traces=llm_traces,
             retrieval_traces=retrieval_traces,
             repair_cache_events=repair_cache_events,
+            functional_repair_events=functional_repair_events,
         )
         if workspace_dir is not None:
             result.workspace_dir = str(Path(workspace_dir).resolve())

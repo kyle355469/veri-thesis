@@ -11,6 +11,8 @@ class AgenticIpReuseConfig:
     retrieve_k: int = 8
     context_k: int = 4
     max_repair_attempts: int = 2
+    enable_functional_repair: bool = False
+    max_functional_repair_attempts: int = 2
     temperature: float = 0.2
     max_tokens: int = 32768
     large_spec_threshold_chars: int = 40000

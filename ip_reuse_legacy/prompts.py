@@ -215,6 +215,47 @@ Current RTL:
 ```"""
 
 
+def build_functional_repair_prompt(
+    plan: IpReusePlan,
+    rtl: str,
+    function_info: str,
+    target_hdl: str,
+    top_module: str | None,
+    *,
+    original_spec: Optional[str] = None,
+    behavioral_slice: Optional[str] = None,
+    reuse_modules: Optional[Dict[str, str]] = None,
+    environment_notes: Optional[Iterable[str]] = None,
+) -> str:
+    """Prompt for the functional (testbench-driven) repair turn.
+
+    Unlike build_repair_prompt, the RTL already compiles and matches the port
+    interface; the failure is logical (outputs mismatch the reference). The
+    behavioral_slice, when provided, replaces the full original_spec as the
+    behavioral context (Part B spec slicing); until then the whole spec is used.
+    """
+    plan_json = json.dumps(asdict(plan), default=json_default, indent=2)
+    context = _generation_context_sections(behavioral_slice or original_spec, reuse_modules, environment_notes)
+    mismatch = function_info.strip() or "the reference testbench reported output mismatches"
+    return f"""This integrated {target_hdl} RTL compiles cleanly but produces outputs that do not match the reference testbench. Fix the internal logic so the outputs match.
+Do NOT change the module's port interface (names, directions, widths) — it already matches the testbench, so changing it would regress. Correct only the behavior/logic.
+Keep the same IP reuse intent. Reused modules listed as provided source files must only be instantiated, never re-declared in your output.
+Return exactly one fenced {target_hdl} code block and no extra prose.
+
+Top module: {top_module or "unknown"}
+
+{context}IP reuse plan:
+{plan_json}
+
+Reference testbench mismatch report (each line names an output, its mismatch count, and the first mismatched simulation time — concentrate on the logic that drives those outputs around that time):
+{mismatch}
+
+Current RTL:
+```{target_hdl}
+{rtl}
+```"""
+
+
 def build_spec_partition_prompt(
     prompt: str,
     target_hdl: str,

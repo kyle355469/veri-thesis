@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .functional_repair import FunctionalRepairMixin
 from .large_spec_stages import LargeSpecStagesMixin
 from .llm_stages import LlmStagesMixin
 from .partition_stages import PartitionStagesMixin
@@ -9,6 +10,7 @@ from .verification_core import VerificationCoreMixin
 from .verification_stages import VerificationStagesMixin
 
 __all__ = [
+    "FunctionalRepairMixin",
     "LargeSpecStagesMixin",
     "LlmStagesMixin",
     "PartitionStagesMixin",

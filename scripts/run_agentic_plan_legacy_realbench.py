@@ -357,6 +357,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--legacy-max-tokens", type=int, default=80000)
     parser.add_argument("--legacy-max-repair-attempts", type=int, default=2)
     parser.add_argument(
+        "--legacy-functional-repair",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="After syntax/lint passes, run the RealBench testbench in-loop and add functional "
+        "(output-mismatch) repair turns driven by the mismatch report. Uses the same testbench "
+        "that scores the benchmark, so report this as a separate experimental arm (default off).",
+    )
+    parser.add_argument(
+        "--legacy-max-functional-repair-attempts",
+        type=int,
+        default=2,
+        help="Maximum functional (testbench-driven) repair turns after the design compiles.",
+    )
+    parser.add_argument(
         "--legacy-spec-max-chars",
         type=int,
         default=120000,
@@ -768,6 +782,11 @@ def run_one(
         "planner_steps": planner_result.steps if planner_result else None,
         "planner_used_tools": planner_result.used_tools if planner_result else None,
         "legacy_repair_attempts": legacy_result.repair_attempts if legacy_result else None,
+        "legacy_functional_repair": args.legacy_functional_repair,
+        "legacy_functional_repair_attempts": (
+            legacy_result.functional_repair_attempts if legacy_result else None
+        ),
+        "legacy_in_loop_function_info": legacy_result.function_info if legacy_result else None,
         "planner_search_mode": args.planner_search_mode,
         "embedder": rag.embedder_name,
         "retrieval_metrics": retrieval_metrics_from(planner_repository, rag.index_meta.get(task.task_id)),
@@ -849,10 +868,18 @@ def make_legacy_agent(
     verifier: Any,
     config: LegacyConfig,
     repair_cache: Any = None,
+    functional_verifier: Any = None,
 ) -> LegacyAgent:
     embedder = HashingEmbedder(dim=128)
     retrieval_context = RetrievalContext.from_store(VectorStore([], embedder.encode([])), embedder)
-    return LegacyAgent(make_legacy_llm(args), retrieval_context, verifier, config, repair_cache=repair_cache)
+    return LegacyAgent(
+        make_legacy_llm(args),
+        retrieval_context,
+        verifier,
+        config,
+        repair_cache=repair_cache,
+        functional_verifier=functional_verifier,
+    )
 
 
 class LockedEmbedder:
@@ -1185,6 +1212,9 @@ def run_legacy_generator(
             wno_flags=wno_flags or None,
             lint_top=makefile_top if include_testbench else None,
         )
+    functional_verifier = (
+        RealBenchFunctionalVerifier(task, args) if args.legacy_functional_repair else None
+    )
     agent = make_legacy_agent(
         args,
         verifier,
@@ -1193,8 +1223,11 @@ def run_legacy_generator(
             max_repair_attempts=args.legacy_max_repair_attempts,
             temperature=args.temperature,
             max_tokens=args.legacy_max_tokens,
+            enable_functional_repair=args.legacy_functional_repair,
+            max_functional_repair_attempts=args.legacy_max_functional_repair_attempts,
         ),
         repair_cache=repair_cache,
+        functional_verifier=functional_verifier,
     )
     provided_signatures, inline_signatures = reuse_module_signatures(task, catalog)
     provided_signatures = {
@@ -1479,6 +1512,45 @@ def evaluate_realbench_code(task: RealBenchTask, code: str, args: argparse.Names
     if args.realbench_verifier == "harness":
         return evaluate_realbench_code_with_harness(task, code, args)
     return evaluate_realbench_code_native(task, code, args)
+
+
+@dataclass
+class FunctionalReport:
+    function_passed: bool
+    function_info: str = ""
+    syntax_ok: bool = True
+    stdout_tail: str = ""
+    error: Optional[str] = None
+
+
+class RealBenchFunctionalVerifier:
+    """Run the RealBench testbench on candidate RTL *inside* the legacy repair loop
+    and report functional (output-mismatch) status. Delegates to the same
+    ``evaluate_realbench_code`` path the final scoring uses (honouring
+    ``--realbench-verifier``), so the in-loop and final verdicts are guaranteed to
+    agree on identical code. Duck-typed for the agent: ``verify_functional``."""
+
+    def __init__(self, task: RealBenchTask, args: argparse.Namespace) -> None:
+        self.task = task
+        self.args = args
+
+    def verify_functional(self, rtl: str, top_module: str | None = None) -> FunctionalReport:
+        code = normalize_code(rtl, self.task.top_module)
+        if not code:
+            return FunctionalReport(
+                function_passed=False,
+                syntax_ok=False,
+                error="functional verification skipped: empty candidate RTL",
+            )
+        code = strip_dependency_redeclarations(code, template_provided_module_names(self.task))
+        result = evaluate_realbench_code(self.task, code, self.args)
+        return FunctionalReport(
+            function_passed=result.function == 1,
+            function_info=result.function_info,
+            syntax_ok=result.syntax == 1,
+            stdout_tail=result.stdout_tail,
+            error=result.error,
+        )
 
 
 def evaluate_realbench_code_native(task: RealBenchTask, code: str, args: argparse.Namespace) -> RealBenchEvalResult:

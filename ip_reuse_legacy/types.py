@@ -77,9 +77,12 @@ class AgenticIpReuseResult:
     final_text: str
     verification: VerificationReport
     repair_attempts: int = 0
+    functional_repair_attempts: int = 0
+    function_info: str = ""
     llm_traces: List[LlmTrace] = field(default_factory=list)
     retrieval_traces: List[Dict[str, Any]] = field(default_factory=list)
     repair_cache_events: List[Dict[str, Any]] = field(default_factory=list)
+    functional_repair_events: List[Dict[str, Any]] = field(default_factory=list)
     large_spec_manifest: Optional[Dict[str, Any]] = None
     decomposition_tree: Optional[Dict[str, Any]] = None
     module_generation: List[Dict[str, Any]] = field(default_factory=list)
@@ -95,9 +98,12 @@ class AgenticIpReuseResult:
             "final_text": self.final_text,
             "verification": self.verification,
             "repair_attempts": self.repair_attempts,
+            "functional_repair_attempts": self.functional_repair_attempts,
+            "function_info": self.function_info,
             "llm_traces": self.llm_traces,
             "retrieval_traces": self.retrieval_traces,
             "repair_cache_events": self.repair_cache_events,
+            "functional_repair_events": self.functional_repair_events,
             "large_spec_manifest": self.large_spec_manifest,
             "decomposition_tree": self.decomposition_tree,
             "module_generation": self.module_generation,
