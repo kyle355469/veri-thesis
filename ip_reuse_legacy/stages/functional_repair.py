@@ -7,6 +7,7 @@ from rag_rtl.llm import extract_code
 from rag_rtl.types import Diagnostic, VerificationReport
 
 from ..prompts import build_functional_repair_prompt
+from ..spec_slice import slice_spec_for_diagnostics
 from ..types import IpReusePlan, LlmTrace
 
 # Reference testbenches print "Output X has N mismatches. First at time T"; the
@@ -83,6 +84,18 @@ class FunctionalRepairMixin:
         while not report.function_passed and attempts < self.config.max_functional_repair_attempts:
             attempts += 1
             self._stage("functional_repair", "running", attempt=attempts)
+            # Focus on the spec section(s) describing the mismatching output(s);
+            # an empty slice falls back to the full spec inside the prompt builder.
+            behavioral_slice = None
+            if getattr(self.config, "enable_repair_spec_slice", False) and original_spec:
+                behavioral_slice = (
+                    slice_spec_for_diagnostics(
+                        original_spec,
+                        function_info=working_info,
+                        max_chars=self.config.repair_spec_slice_max_chars,
+                    )
+                    or None
+                )
             final_text = self._complete_text(
                 f"functional_repair_{attempts}",
                 build_functional_repair_prompt(
@@ -92,6 +105,7 @@ class FunctionalRepairMixin:
                     target,
                     top_module,
                     original_spec=original_spec,
+                    behavioral_slice=behavioral_slice,
                     reuse_modules=reuse_modules,
                     environment_notes=environment_notes,
                 ),

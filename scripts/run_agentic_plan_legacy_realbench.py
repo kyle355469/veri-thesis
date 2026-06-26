@@ -371,6 +371,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum functional (testbench-driven) repair turns after the design compiles.",
     )
     parser.add_argument(
+        "--legacy-repair-spec-slice",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="In repair prompts, replace the full spec with the error-relevant slice (interface "
+        "contract + the spec sections naming the failing signal/output). Falls back to the full "
+        "spec when no identifier is named. Separate ablation arm (default off).",
+    )
+    parser.add_argument(
+        "--legacy-repair-spec-slice-max-chars",
+        type=int,
+        default=24000,
+        help="Character budget for the focused spec slice injected into repair prompts.",
+    )
+    parser.add_argument(
         "--legacy-spec-max-chars",
         type=int,
         default=120000,
@@ -787,6 +801,7 @@ def run_one(
             legacy_result.functional_repair_attempts if legacy_result else None
         ),
         "legacy_in_loop_function_info": legacy_result.function_info if legacy_result else None,
+        "legacy_repair_spec_slice": args.legacy_repair_spec_slice,
         "planner_search_mode": args.planner_search_mode,
         "embedder": rag.embedder_name,
         "retrieval_metrics": retrieval_metrics_from(planner_repository, rag.index_meta.get(task.task_id)),
@@ -1225,6 +1240,8 @@ def run_legacy_generator(
             max_tokens=args.legacy_max_tokens,
             enable_functional_repair=args.legacy_functional_repair,
             max_functional_repair_attempts=args.legacy_max_functional_repair_attempts,
+            enable_repair_spec_slice=args.legacy_repair_spec_slice,
+            repair_spec_slice_max_chars=args.legacy_repair_spec_slice_max_chars,
         ),
         repair_cache=repair_cache,
         functional_verifier=functional_verifier,

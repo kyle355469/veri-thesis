@@ -13,6 +13,8 @@ class AgenticIpReuseConfig:
     max_repair_attempts: int = 2
     enable_functional_repair: bool = False
     max_functional_repair_attempts: int = 2
+    enable_repair_spec_slice: bool = False
+    repair_spec_slice_max_chars: int = 24000
     temperature: float = 0.2
     max_tokens: int = 32768
     large_spec_threshold_chars: int = 40000

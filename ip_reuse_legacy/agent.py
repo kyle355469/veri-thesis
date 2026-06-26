@@ -36,6 +36,7 @@ from .prompts import (
 )
 from .retrieval import candidate_from_hit
 from .serialization import dumps_result
+from .spec_slice import slice_spec_for_diagnostics
 from .stages import (
     FunctionalRepairMixin,
     LargeSpecStagesMixin,
@@ -347,6 +348,17 @@ class AgenticIpReuseAgent(
                 if hint is not None:
                     repair_hints = [hint.text]
             prev_rtl = rtl
+            # Focus the repair prompt on the spec slice the diagnostics point at;
+            # an empty slice (e.g. pure PARSE) falls back to the full spec.
+            spec_for_repair = original_spec
+            if self.config.enable_repair_spec_slice and original_spec:
+                sliced = slice_spec_for_diagnostics(
+                    original_spec,
+                    diagnostics=diagnostics,
+                    max_chars=self.config.repair_spec_slice_max_chars,
+                )
+                if sliced:
+                    spec_for_repair = sliced
             final_text = self._complete_text(
                 f"repair_{repair_attempts}",
                 build_repair_prompt(
@@ -355,7 +367,7 @@ class AgenticIpReuseAgent(
                     diagnostics,
                     target,
                     top_module,
-                    original_spec=original_spec,
+                    original_spec=spec_for_repair,
                     reuse_modules=reuse_modules,
                     environment_notes=environment_notes,
                     repair_hints=repair_hints,
