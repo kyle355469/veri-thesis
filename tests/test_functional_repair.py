@@ -183,6 +183,12 @@ class FunctionalRepairTests(unittest.TestCase):
         self.assertEqual(result.functional_repair_attempts, 2)
         self.assertIn("v1", result.rtl)  # lowest mismatch count wins
         self.assertIn("3 mismatches", result.function_info)
+        # Per-attempt mismatch trajectory is captured for downstream analysis: the
+        # verify baseline, the improving turn (accepted), and the regressing turn.
+        events = result.functional_repair_events
+        self.assertEqual([e["mismatches"] for e in events], [10, 3, 7])
+        self.assertEqual([e["accepted_as_best"] for e in events[1:]], [True, False])
+        self.assertEqual(events[2]["prev_best_mismatches"], 3)
 
     def test_syntax_regressing_candidate_is_discarded(self):
         verifier = StubFunctionalVerifier(

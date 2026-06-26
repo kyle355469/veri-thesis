@@ -71,6 +71,8 @@ class FunctionalRepairMixin:
                 "attempt": 0,
                 "function_passed": report.function_passed,
                 "syntax_ok": report.syntax_ok,
+                "mismatches": _mismatch_count(report.function_info),
+                "function_info": (report.function_info or "")[:500],
             }
         )
 
@@ -117,12 +119,22 @@ class FunctionalRepairMixin:
                 events.append({"event": "repair", "attempt": attempts, "status": "empty_code"})
                 continue
             report = self.functional_verifier.verify_functional(candidate, top_module)
+            # Mismatch trajectory: record this candidate's count against the best so
+            # far, so analysis can see whether a non-passing turn still got closer.
+            candidate_mismatches = _mismatch_count(report.function_info)
+            accepted_as_best = report.function_passed or (
+                report.syntax_ok and candidate_mismatches < best_mismatches
+            )
             events.append(
                 {
                     "event": "repair",
                     "attempt": attempts,
                     "function_passed": report.function_passed,
                     "syntax_ok": report.syntax_ok,
+                    "mismatches": candidate_mismatches,
+                    "prev_best_mismatches": best_mismatches,
+                    "accepted_as_best": bool(accepted_as_best),
+                    "function_info": (report.function_info or "")[:500],
                 }
             )
             self._stage(
@@ -138,9 +150,8 @@ class FunctionalRepairMixin:
             if report.syntax_ok:
                 # Compiling candidate: advance the working design and keep the best.
                 working_rtl, working_info = candidate, report.function_info
-                mismatches = _mismatch_count(report.function_info)
-                if mismatches < best_mismatches:
-                    best_rtl, best_report, best_mismatches = candidate, report, mismatches
+                if candidate_mismatches < best_mismatches:
+                    best_rtl, best_report, best_mismatches = candidate, report, candidate_mismatches
             # A non-compiling candidate is discarded: working_rtl/working_info stay
             # at the last compiling design so the next prompt keeps real mismatch info.
 
