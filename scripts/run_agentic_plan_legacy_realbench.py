@@ -116,6 +116,17 @@ class RealBenchEvalResult:
         return self.syntax == 1 and self.function == 1
 
 
+# Extra Verilator warning suppression applied on top of the eval Makefile's own
+# -Wno list. TIMESCALEMOD fires (fatally, since warnings are errors here) when a
+# generated module carries a `timescale directive while the eval's own ref/
+# testbench/stimulus files do not — a harness-strictness artifact, not a logic
+# defect. Suppressing it lets such code be judged on its behaviour. Applied to
+# BOTH the in-loop lint and the final native eval so their verdicts still agree.
+# NOTE: changes benchmark scoring — rescore all runs under the same setting for
+# comparability; gated by --eval-wno-timescalemod (default on) for ablation.
+TIMESCALEMOD_WNO = "-Wno-TIMESCALEMOD"
+
+
 class NoopVerifier:
     def verify(self, rtl: str, top_module: str | None = None) -> VerificationReport:
         return VerificationReport(
@@ -227,6 +238,14 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["native", "harness"],
         default="native",
         help="native runs RealBench verification Makefiles directly; harness delegates to run_verify.py.",
+    )
+    parser.add_argument(
+        "--eval-wno-timescalemod",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Add -Wno-TIMESCALEMOD to both the in-loop lint and the final native eval, so a "
+        "generated `timescale (which the eval's own ref/testbench files lack) is not a fatal "
+        "warning. Changes benchmark scoring; only honoured by the native verifier.",
     )
 
     parser.add_argument("--base-url", help="OpenAI-compatible vLLM base URL. Defaults to VLLM_BASE_URL.")
@@ -802,6 +821,7 @@ def run_one(
         ),
         "legacy_in_loop_function_info": legacy_result.function_info if legacy_result else None,
         "legacy_repair_spec_slice": args.legacy_repair_spec_slice,
+        "eval_wno_timescalemod": args.eval_wno_timescalemod,
         "planner_search_mode": args.planner_search_mode,
         "embedder": rag.embedder_name,
         "retrieval_metrics": retrieval_metrics_from(planner_repository, rag.index_meta.get(task.task_id)),
@@ -1219,6 +1239,8 @@ def run_legacy_generator(
         verifier: Any = NoopVerifier()
     else:
         wno_flags, makefile_top = makefile_lint_settings(task)
+        if args.eval_wno_timescalemod and TIMESCALEMOD_WNO not in wno_flags:
+            wno_flags = [*wno_flags, TIMESCALEMOD_WNO]
         include_testbench = bool(args.legacy_lint_with_testbench and makefile_top)
         verifier = RealBenchWorkspaceVerifier(
             verilator_bin=args.verilator_bin,
@@ -1579,6 +1601,13 @@ def evaluate_realbench_code_native(task: RealBenchTask, code: str, args: argpars
         with tempfile.TemporaryDirectory(prefix=f"realbench_{task.task}_") as temp_name:
             temp_dir = Path(temp_name)
             copy_verification_template(template_dir, temp_dir)
+            if getattr(args, "eval_wno_timescalemod", True):
+                # Append after the template's own assignments so the `+=` flags are
+                # picked up; editing only the temp copy leaves the oracle untouched.
+                makefile_path = temp_dir / "Makefile"
+                if makefile_path.exists():
+                    with makefile_path.open("a", encoding="utf-8") as handle:
+                        handle.write(f"\nVERILATOR_FLAGS += {TIMESCALEMOD_WNO}\n")
             top_path = temp_dir / top_filename
             if top_path.exists():
                 top_path.unlink()
