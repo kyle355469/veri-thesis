@@ -1,0 +1,545 @@
+{
+  "realbench_root": "/home/kai/eval_dt/real_bench",
+  "labels": {
+    "sd_bd": {
+      "label": "B",
+      "reason": "core (own_cells=1713)",
+      "own_cells": 1713,
+      "insts": 13,
+      "always": 6,
+      "case": 0,
+      "assign": 0
+    },
+    "sd_clock_divider": {
+      "label": "A",
+      "reason": "thin (own_cells=47)",
+      "own_cells": 47,
+      "insts": 4,
+      "always": 1,
+      "case": 0,
+      "assign": 1
+    },
+    "sd_crc_16": {
+      "label": "A",
+      "reason": "thin (own_cells=20)",
+      "own_cells": 20,
+      "insts": 1,
+      "always": 1,
+      "case": 0,
+      "assign": 1
+    },
+    "sd_crc_7": {
+      "label": "A",
+      "reason": "thin (own_cells=9)",
+      "own_cells": 9,
+      "insts": 1,
+      "always": 1,
+      "case": 0,
+      "assign": 1
+    },
+    "sd_controller_wb": {
+      "label": "B",
+      "reason": "core (own_cells=776)",
+      "own_cells": 776,
+      "insts": 12,
+      "always": 2,
+      "case": 2,
+      "assign": 0
+    },
+    "sd_data_master": {
+      "label": "B",
+      "reason": "core (own_cells=332)",
+      "own_cells": 332,
+      "insts": 19,
+      "always": 4,
+      "case": 2,
+      "assign": 0
+    },
+    "sd_cmd_master": {
+      "label": "B",
+      "reason": "core (own_cells=330)",
+      "own_cells": 330,
+      "insts": 9,
+      "always": 6,
+      "case": 2,
+      "assign": 0
+    },
+    "sd_rx_fifo": {
+      "label": "B",
+      "reason": "core (own_cells=818)",
+      "own_cells": 818,
+      "insts": 4,
+      "always": 5,
+      "case": 0,
+      "assign": 6
+    },
+    "sd_tx_fifo": {
+      "label": "B",
+      "reason": "core (own_cells=779)",
+      "own_cells": 779,
+      "insts": 3,
+      "always": 3,
+      "case": 0,
+      "assign": 6
+    },
+    "sd_fifo_rx_filler": {
+      "label": "A",
+      "reason": "thin (own_cells=159)",
+      "own_cells": 159,
+      "insts": 4,
+      "always": 1,
+      "case": 0,
+      "assign": 1
+    },
+    "sd_fifo_tx_filler": {
+      "label": "B",
+      "reason": "core (no-synth, has logic)",
+      "own_cells": null,
+      "insts": 5,
+      "always": 1,
+      "case": 0,
+      "assign": 1
+    },
+    "sd_data_serial_host": {
+      "label": "B",
+      "reason": "core (own_cells=770)",
+      "own_cells": 770,
+      "insts": 12,
+      "always": 5,
+      "case": 3,
+      "assign": 0
+    },
+    "sd_cmd_serial_host": {
+      "label": "B",
+      "reason": "core (own_cells=1335)",
+      "own_cells": 1335,
+      "insts": 21,
+      "always": 6,
+      "case": 2,
+      "assign": 1
+    },
+    "sdc_controller": {
+      "label": "B",
+      "reason": "core (own_cells=254)",
+      "own_cells": 254,
+      "insts": 11,
+      "always": 1,
+      "case": 0,
+      "assign": 16
+    },
+    "aes_sbox": {
+      "label": "B",
+      "reason": "core (own_cells=611)",
+      "own_cells": 611,
+      "insts": 1,
+      "always": 1,
+      "case": 1,
+      "assign": 0
+    },
+    "aes_rcon": {
+      "label": "A",
+      "reason": "thin (own_cells=42)",
+      "own_cells": 42,
+      "insts": 1,
+      "always": 2,
+      "case": 1,
+      "assign": 1
+    },
+    "aes_inv_sbox": {
+      "label": "B",
+      "reason": "core (own_cells=640)",
+      "own_cells": 640,
+      "insts": 1,
+      "always": 1,
+      "case": 1,
+      "assign": 0
+    },
+    "aes_key_expand_128": {
+      "label": "B",
+      "reason": "core (own_cells=482)",
+      "own_cells": 482,
+      "insts": 6,
+      "always": 4,
+      "case": 0,
+      "assign": 5
+    },
+    "aes_cipher_top": {
+      "label": "B",
+      "reason": "core (own_cells=1253)",
+      "own_cells": 1253,
+      "insts": 20,
+      "always": 36,
+      "case": 0,
+      "assign": 40
+    },
+    "aes_inv_cipher_top": {
+      "label": "B",
+      "reason": "core (own_cells=6275)",
+      "own_cells": 6275,
+      "insts": 27,
+      "always": 42,
+      "case": 0,
+      "assign": 40
+    },
+    "e203_biu": {
+      "label": "A",
+      "reason": "thin (own_cells=119)",
+      "own_cells": 119,
+      "insts": 4,
+      "always": 0,
+      "case": 0,
+      "assign": 39
+    },
+    "e203_clk_ctrl": {
+      "label": "A",
+      "reason": "wrapper/regular",
+      "own_cells": null,
+      "assign": 3,
+      "always": 0,
+      "case": 0,
+      "insts": 9
+    },
+    "e203_clkgate": {
+      "label": "A",
+      "reason": "thin (own_cells=3)",
+      "own_cells": 3,
+      "insts": 1,
+      "always": 1,
+      "case": 0,
+      "assign": 2
+    },
+    "e203_core": {
+      "label": "A",
+      "reason": "wrapper/regular",
+      "own_cells": null,
+      "assign": 0,
+      "always": 0,
+      "case": 0,
+      "insts": 5
+    },
+    "e203_cpu": {
+      "label": "A",
+      "reason": "wrapper/regular",
+      "own_cells": null,
+      "assign": 7,
+      "always": 0,
+      "case": 0,
+      "insts": 7
+    },
+    "e203_cpu_top": {
+      "label": "B",
+      "reason": "core (no-synth, has logic)",
+      "own_cells": null,
+      "insts": 3,
+      "always": 0,
+      "case": 0,
+      "assign": 19
+    },
+    "e203_dtcm_ctrl": {
+      "label": "B",
+      "reason": "core (no-synth, has logic)",
+      "own_cells": null,
+      "insts": 3,
+      "always": 0,
+      "case": 0,
+      "assign": 22
+    },
+    "e203_dtcm_ram": {
+      "label": "A",
+      "reason": "wrapper/regular",
+      "own_cells": null,
+      "assign": 0,
+      "always": 0,
+      "case": 0,
+      "insts": 2
+    },
+    "e203_extend_csr": {
+      "label": "A",
+      "reason": "thin (no-synth)",
+      "own_cells": null,
+      "insts": 1,
+      "always": 0,
+      "case": 0,
+      "assign": 2
+    },
+    "e203_exu": {
+      "label": "A",
+      "reason": "wrapper/regular",
+      "own_cells": null,
+      "assign": 5,
+      "always": 0,
+      "case": 0,
+      "insts": 10
+    },
+    "e203_exu_alu": {
+      "label": "B",
+      "reason": "core (own_cells=1046)",
+      "own_cells": 1046,
+      "insts": 8,
+      "always": 0,
+      "case": 0,
+      "assign": 41
+    },
+    "e203_exu_alu_bjp": {
+      "label": "A",
+      "reason": "thin (own_cells=67)",
+      "own_cells": 67,
+      "insts": 1,
+      "always": 0,
+      "case": 0,
+      "assign": 19
+    },
+    "e203_exu_alu_csrctrl": {
+      "label": "A",
+      "reason": "thin (own_cells=122)",
+      "own_cells": 122,
+      "insts": 1,
+      "always": 0,
+      "case": 0,
+      "assign": 18
+    },
+    "e203_exu_alu_dpath": {
+      "label": "B",
+      "reason": "core (own_cells=1902)",
+      "own_cells": 1902,
+      "insts": 3,
+      "always": 0,
+      "case": 0,
+      "assign": 26
+    },
+    "e203_exu_alu_lsuagu": {
+      "label": "B",
+      "reason": "core (own_cells=592)",
+      "own_cells": 592,
+      "insts": 4,
+      "always": 0,
+      "case": 0,
+      "assign": 73
+    },
+    "e203_exu_alu_muldiv": {
+      "label": "A",
+      "reason": "thin (no-synth)",
+      "own_cells": null,
+      "insts": 1,
+      "always": 0,
+      "case": 0,
+      "assign": 0
+    },
+    "e203_exu_alu_rglr": {
+      "label": "A",
+      "reason": "thin (own_cells=67)",
+      "own_cells": 67,
+      "insts": 1,
+      "always": 0,
+      "case": 0,
+      "assign": 20
+    },
+    "e203_exu_branchslv": {
+      "label": "B",
+      "reason": "core (own_cells=699)",
+      "own_cells": 699,
+      "insts": 1,
+      "always": 0,
+      "case": 0,
+      "assign": 10
+    },
+    "e203_exu_commit": {
+      "label": "A",
+      "reason": "wrapper/regular",
+      "own_cells": null,
+      "assign": 13,
+      "always": 0,
+      "case": 0,
+      "insts": 3
+    },
+    "e203_exu_csr": {
+      "label": "B",
+      "reason": "core (own_cells=1683)",
+      "own_cells": 1683,
+      "insts": 20,
+      "always": 0,
+      "case": 0,
+      "assign": 64
+    },
+    "e203_exu_decode": {
+      "label": "B",
+      "reason": "core (own_cells=824)",
+      "own_cells": 824,
+      "insts": 1,
+      "always": 0,
+      "case": 0,
+      "assign": 115
+    },
+    "e203_exu_disp": {
+      "label": "A",
+      "reason": "thin (own_cells=82)",
+      "own_cells": 82,
+      "insts": 1,
+      "always": 0,
+      "case": 0,
+      "assign": 29
+    },
+    "e203_exu_excp": {
+      "label": "B",
+      "reason": "core (own_cells=474)",
+      "own_cells": 474,
+      "insts": 4,
+      "always": 0,
+      "case": 0,
+      "assign": 42
+    },
+    "e203_exu_longpwbck": {
+      "label": "A",
+      "reason": "thin (own_cells=149)",
+      "own_cells": 149,
+      "insts": 1,
+      "always": 0,
+      "case": 0,
+      "assign": 20
+    },
+    "e203_exu_nice": {
+      "label": "A",
+      "reason": "wrapper/regular",
+      "own_cells": null,
+      "assign": 10,
+      "always": 0,
+      "case": 0,
+      "insts": 2
+    },
+    "e203_exu_oitf": {
+      "label": "A",
+      "reason": "thin (own_cells=191)",
+      "own_cells": 191,
+      "insts": 12,
+      "always": 0,
+      "case": 0,
+      "assign": 27
+    },
+    "e203_exu_regfile": {
+      "label": "A",
+      "reason": "wrapper/regular",
+      "own_cells": null,
+      "assign": 7,
+      "always": 0,
+      "case": 0,
+      "insts": 6
+    },
+    "e203_exu_wbck": {
+      "label": "A",
+      "reason": "thin (own_cells=41)",
+      "own_cells": 41,
+      "insts": 1,
+      "always": 0,
+      "case": 0,
+      "assign": 12
+    },
+    "e203_ifu": {
+      "label": "A",
+      "reason": "wrapper/regular",
+      "own_cells": null,
+      "assign": 1,
+      "always": 0,
+      "case": 0,
+      "insts": 3
+    },
+    "e203_ifu_ifetch": {
+      "label": "B",
+      "reason": "core (own_cells=476)",
+      "own_cells": 476,
+      "insts": 21,
+      "always": 0,
+      "case": 0,
+      "assign": 44
+    },
+    "e203_ifu_ift2icb": {
+      "label": "B",
+      "reason": "core (own_cells=596)",
+      "own_cells": 596,
+      "insts": 12,
+      "always": 0,
+      "case": 0,
+      "assign": 36
+    },
+    "e203_ifu_litebpu": {
+      "label": "A",
+      "reason": "wrapper/regular",
+      "own_cells": null,
+      "assign": 5,
+      "always": 0,
+      "case": 0,
+      "insts": 2
+    },
+    "e203_ifu_minidec": {
+      "label": "A",
+      "reason": "wrapper/regular",
+      "own_cells": null,
+      "assign": 0,
+      "always": 0,
+      "case": 0,
+      "insts": 2
+    },
+    "e203_irq_sync": {
+      "label": "A",
+      "reason": "wrapper/regular",
+      "own_cells": null,
+      "assign": 8,
+      "always": 0,
+      "case": 0,
+      "insts": 5
+    },
+    "e203_itcm_ctrl": {
+      "label": "B",
+      "reason": "core (no-synth, has logic)",
+      "own_cells": null,
+      "insts": 6,
+      "always": 0,
+      "case": 0,
+      "assign": 28
+    },
+    "e203_itcm_ram": {
+      "label": "A",
+      "reason": "wrapper/regular",
+      "own_cells": null,
+      "assign": 0,
+      "always": 0,
+      "case": 0,
+      "insts": 2
+    },
+    "e203_lsu": {
+      "label": "A",
+      "reason": "wrapper/regular",
+      "own_cells": null,
+      "assign": 1,
+      "always": 0,
+      "case": 0,
+      "insts": 2
+    },
+    "e203_lsu_ctrl": {
+      "label": "B",
+      "reason": "core (own_cells=570)",
+      "own_cells": 570,
+      "insts": 6,
+      "always": 0,
+      "case": 0,
+      "assign": 83
+    },
+    "e203_reset_ctrl": {
+      "label": "A",
+      "reason": "thin (own_cells=3)",
+      "own_cells": 3,
+      "insts": 1,
+      "always": 2,
+      "case": 0,
+      "assign": 6
+    },
+    "e203_srams": {
+      "label": "A",
+      "reason": "wrapper/regular",
+      "own_cells": null,
+      "assign": 2,
+      "always": 0,
+      "case": 0,
+      "insts": 3
+    }
+  }
+}

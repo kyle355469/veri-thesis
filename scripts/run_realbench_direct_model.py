@@ -69,6 +69,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--solution-name", default="direct_model")
     parser.add_argument("--task-level", choices=["module", "system", "both"], default="both")
     parser.add_argument("--include", action="append", default=[])
+    parser.add_argument(
+        "--include-exact",
+        action="append",
+        default=[],
+        help="Exact task-name (or task_id) whitelist; takes precedence over --include. Used by the "
+        "router to partition tasks across flows without substring collisions.",
+    )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--samples", type=int, default=1)
     parser.add_argument("--concurrency", type=int, default=1)

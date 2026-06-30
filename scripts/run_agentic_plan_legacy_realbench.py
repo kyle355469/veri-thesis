@@ -30,6 +30,7 @@ for path in (str(PLANNER_ROOT), str(REPO_ROOT)):
         sys.path.insert(0, path)
 
 from agentic_ip_reuse.agent import AgentConfig, AgenticIpReuseAgent as PlanningAgent, dumps_result as dumps_plan_result
+from agentic_ip_reuse.hierarchical import HierarchicalAgent, HierarchicalConfig
 from agentic_ip_reuse.llm import VllmClient as PlanningVllmClient
 from agentic_ip_reuse.repository import JsonIpRepository
 from agentic_ip_reuse.semantic_repository import SemanticIpRepository
@@ -40,6 +41,7 @@ from ip_reuse_legacy.config import AgenticIpReuseConfig as LegacyConfig
 from ip_reuse_legacy.plan_adapter import agentic_plan_from_payload
 from ip_reuse_legacy.types import IpReusePlan
 from rag_rtl.embeddings import HashingEmbedder, make_embedder_with_fallback
+from rag_rtl import routing
 from rag_rtl.json_utils import dumps_json
 from rag_rtl.llm import VllmClient as LegacyVllmClient, extract_code
 from rag_rtl.repair_cache import RepairFixCache
@@ -226,6 +228,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--solution-name", default="agentic_plan_legacy")
     parser.add_argument("--task-level", choices=["module", "system", "both"], default="both")
     parser.add_argument("--include", action="append", default=[])
+    parser.add_argument(
+        "--include-exact",
+        action="append",
+        default=[],
+        help="Exact task-name (or task_id) whitelist; takes precedence over --include. Used by the "
+        "router to partition tasks across flows without substring collisions (e203_ifu vs e203_ifu_minidec).",
+    )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--samples", type=int, default=1)
     parser.add_argument("--concurrency", type=int, default=1)
@@ -287,6 +296,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--planner-max-catalog-entries", type=int, default=60)
     parser.set_defaults(planner_inject_catalog=True, planner_ground_reuse=True, planner_completeness_gate=True)
+    parser.add_argument(
+        "--planner-hierarchical",
+        dest="planner_hierarchical",
+        action="store_true",
+        help="Enable recursive tree decomposition of the plan: any planned module tagged "
+        "\"needs_decomposition\" is re-planned as its own sub-task, building a tree of sub-plans. "
+        "Off by default (flat one-level planning).",
+    )
+    parser.set_defaults(planner_hierarchical=False)
+    parser.add_argument(
+        "--planner-max-depth",
+        type=int,
+        default=2,
+        help="Maximum extra recursion depth when --planner-hierarchical is set (ignored otherwise).",
+    )
     parser.add_argument(
         "--planner-search-mode",
         choices=["token", "semantic", "hybrid"],
@@ -458,6 +482,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--agent-timeout-s", type=int, default=120)
     parser.add_argument("--verification-timeout-s", type=int, default=300)
     parser.add_argument("--make-bin", default="make")
+    parser.add_argument(
+        "--plan-probe",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Tier-1 routing: after the plan is generated, judge it (rag_rtl.routing.decide_plan); "
+        "if it reads as a wrapper/thin module, discard the plan and generate directly instead of "
+        "running the legacy RTL+repair stage. The discarded plan is the only wasted compute.",
+    )
+    parser.add_argument(
+        "--plan-probe-include",
+        action="append",
+        default=[],
+        help="Restrict --plan-probe to tasks whose level/system/task/task_id contains one of these "
+        "substrings (repeatable). Empty + --plan-probe = probe every task this runner receives.",
+    )
     return parser
 
 
@@ -534,6 +573,7 @@ def discover_tasks(args: argparse.Namespace) -> List[RealBenchTask]:
     ensure_problem_files(root, levels, args.prepare_problems)
     benchmark_info, system_info = load_benchmark_info(root)
     filters = [item.lower() for item in args.include if item.strip()]
+    exact_filters = [item for item in getattr(args, "include_exact", []) if item and item.strip()]
     tasks: List[RealBenchTask] = []
     if "module" in levels:
         for system, modules in benchmark_info.items():
@@ -550,7 +590,7 @@ def discover_tasks(args: argparse.Namespace) -> List[RealBenchTask]:
                     dependencies=[item for item in dependencies if item != module_name],
                     root_dir=root,
                 )
-                if include_task(task, filters):
+                if include_task(task, filters, exact_filters):
                     tasks.append(task)
     if "system" in levels:
         prompts = read_problem_jsonl(root / "problems" / "system" / "problems.jsonl")
@@ -566,14 +606,18 @@ def discover_tasks(args: argparse.Namespace) -> List[RealBenchTask]:
                 dependencies=[item for item in dependencies if item != system_name],
                 root_dir=root,
             )
-            if include_task(task, filters):
+            if include_task(task, filters, exact_filters):
                 tasks.append(task)
     if args.limit is not None:
         tasks = tasks[: args.limit]
     return tasks
 
 
-def include_task(task: RealBenchTask, filters: Sequence[str]) -> bool:
+def include_task(task: RealBenchTask, filters: Sequence[str], exact_filters: Sequence[str] = ()) -> bool:
+    # Exact filters (used by the router for unambiguous per-task partitioning) take
+    # precedence: when present, only tasks matching one exactly by name or task_id pass.
+    if exact_filters:
+        return task.task in exact_filters or task.task_id in exact_filters
     if not filters:
         return True
     haystack = f"{task.level} {task.system} {task.task} {task.task_id}".lower()
@@ -752,6 +796,9 @@ def run_one(
     spec_condensed = False
     planner_repository: Any = None
     repair_cache = rag.repair_cache_for(task.task_id)
+    route_decision = "pipeline"
+    routed_by = "none"
+    flow_taken = "pipeline"
 
     if not catalog.usable:
         generation_error = f"missing dependency source(s): {', '.join(catalog.missing_dependencies)}"
@@ -770,13 +817,27 @@ def run_one(
             planner_repository = make_planner_repository(task, catalog, args, rag)
             planner_result = run_planner(task, catalog, args, plan_dir, spec_bundle.planner, planner_repository)
             plan_report_path.write_text(dumps_plan_result(planner_result), encoding="utf-8")
-            legacy_plan = agentic_plan_from_payload(planner_result.to_dict())
-            enrich_legacy_plan_with_sources(legacy_plan, catalog, task, args)
-            legacy_result = run_legacy_generator(
-                task, legacy_plan, args, legacy_workspace, catalog, spec_bundle.generation, repair_cache
-            )
-            legacy_report_path.write_text(dumps_json(legacy_result.to_dict(), indent=2), encoding="utf-8")
-            code = normalize_code(legacy_result.rtl, task.top_module)
+
+            # Tier-1 plan-probe: judge the plan; a wrapper/thin module skips the heavy
+            # legacy RTL+repair stage and is generated directly (the plan is discarded).
+            if plan_probe_enabled(task, args):
+                routed_by = "plan_probe"
+                route_decision = routing.decide_plan(planner_result.to_dict())
+
+            if route_decision == "direct":
+                from scripts.run_realbench_direct_model import run_direct_generation  # lazy: import cycle
+
+                direct_gen = run_direct_generation(task, direct_args_shim(args), get_direct_client(args))
+                code = normalize_code(direct_gen.code, task.top_module)
+                flow_taken = "direct"
+            else:
+                legacy_plan = agentic_plan_from_payload(planner_result.to_dict())
+                enrich_legacy_plan_with_sources(legacy_plan, catalog, task, args)
+                legacy_result = run_legacy_generator(
+                    task, legacy_plan, args, legacy_workspace, catalog, spec_bundle.generation, repair_cache
+                )
+                legacy_report_path.write_text(dumps_json(legacy_result.to_dict(), indent=2), encoding="utf-8")
+                code = normalize_code(legacy_result.rtl, task.top_module)
             if code:
                 code = strip_dependency_redeclarations(code, template_provided_module_names(task))
         except Exception as exc:  # noqa: BLE001 - keep benchmark moving.
@@ -829,6 +890,10 @@ def run_one(
         "llm_token_estimate": llm_token_estimate_from(legacy_result),
         "spec_chars": len(task.prompt),
         "spec_condensed": spec_condensed,
+        "flow": flow_taken,
+        "route_decision": route_decision,
+        "routed_by": routed_by,
+        "wasted_plan": bool(routed_by == "plan_probe" and route_decision == "direct"),
         "syntax": eval_result.syntax,
         "function": eval_result.function,
         "passed": eval_result.passed,
@@ -863,30 +928,89 @@ def run_planner(
         api_key=args.api_key or os.getenv("VLLM_API_KEY", "EMPTY"),
         timeout_s=args.llm_timeout_s,
     )
+    agent_config = AgentConfig(
+        temperature=args.temperature,
+        max_tokens=args.planner_max_tokens,
+        use_tools=args.planner_enable_tools,
+        tool_choice=args.planner_tool_choice,
+        max_steps=args.planner_max_steps,
+        inject_catalog=args.planner_inject_catalog,
+        ground_reuse_decisions=args.planner_ground_reuse,
+        completeness_gate=args.planner_completeness_gate,
+        max_catalog_entries=args.planner_max_catalog_entries,
+    )
+    design_task = DesignTask(
+        prompt=spec_text,
+        target_hdl=args.target_hdl,
+        constraints=task_constraints(task),
+        known_interfaces=[],
+        ppa_targets=[],
+    )
+
+    # Tree decomposition (off by default). When enabled, the harness drives a
+    # recursive planner: each planned module tagged "needs_decomposition" is
+    # re-planned as its own sub-task, building a tree of sub-plans. The root
+    # plan is threaded downstream unchanged, so the legacy RTL stage is
+    # unaffected; the full tree is recorded in hierarchical_summary.json.
+    if getattr(args, "planner_hierarchical", False):
+        h_agent = HierarchicalAgent(
+            llm_client=llm,
+            base_executor=executor,
+            agent_config=agent_config,
+            h_config=HierarchicalConfig(max_depth=args.planner_max_depth),
+        )
+        h_plan = h_agent.run(design_task)
+        h_plan.write_hierarchical_summary(output_dir)
+        return h_plan.result
+
     agent = PlanningAgent(
         llm_client=llm,
         tool_executor=executor,
-        config=AgentConfig(
-            temperature=args.temperature,
-            max_tokens=args.planner_max_tokens,
-            use_tools=args.planner_enable_tools,
-            tool_choice=args.planner_tool_choice,
-            max_steps=args.planner_max_steps,
-            inject_catalog=args.planner_inject_catalog,
-            ground_reuse_decisions=args.planner_ground_reuse,
-            completeness_gate=args.planner_completeness_gate,
-            max_catalog_entries=args.planner_max_catalog_entries,
-        ),
+        config=agent_config,
     )
-    return agent.run(
-        DesignTask(
-            prompt=spec_text,
-            target_hdl=args.target_hdl,
-            constraints=task_constraints(task),
-            known_interfaces=[],
-            ppa_targets=[],
-        )
+    return agent.run(design_task)
+
+
+_DIRECT_CLIENT_LOCK = threading.Lock()
+_DIRECT_CLIENT_CACHE: Dict[str, Any] = {}
+
+
+def get_direct_client(args: argparse.Namespace) -> Any:
+    """Memoized direct-model client for the plan-probe downgrade path (thread-safe)."""
+    key = f"{args.base_url}|{args.model}"
+    with _DIRECT_CLIENT_LOCK:
+        client = _DIRECT_CLIENT_CACHE.get(key)
+        if client is None:
+            from scripts.run_realbench_direct_model import make_client  # lazy: avoid import cycle
+
+            client = make_client(args)
+            _DIRECT_CLIENT_CACHE[key] = client
+    return client
+
+
+def direct_args_shim(args: argparse.Namespace) -> argparse.Namespace:
+    """Minimal Namespace exposing the fields run_direct_generation reads, mapped from agentic args."""
+    return argparse.Namespace(
+        target_hdl=args.target_hdl,
+        prompt_max_chars=getattr(args, "legacy_spec_max_chars", 0) or 0,
+        max_tokens=getattr(args, "legacy_max_tokens", 8192),
+        temperature=args.temperature,
     )
+
+
+def plan_probe_enabled(task: RealBenchTask, args: argparse.Namespace) -> bool:
+    """Whether Tier-1 plan-probe applies to this task.
+
+    Empty ``--plan-probe-include`` (with ``--plan-probe``) probes every received task;
+    otherwise only exact task-name/task_id matches are probed (exact, to avoid the
+    e203_ifu vs e203_ifu_minidec prefix collision when the router restricts the set).
+    """
+    if not getattr(args, "plan_probe", False):
+        return False
+    incl = [item for item in getattr(args, "plan_probe_include", []) if item and item.strip()]
+    if not incl:
+        return True
+    return task.task in incl or task.task_id in incl
 
 
 def make_legacy_llm(args: argparse.Namespace) -> LegacyVllmClient:
