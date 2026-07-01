@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -1787,6 +1788,39 @@ def normalize_code(code: str, top_module: str) -> str:
     return extracted
 
 
+def _run_capture_group(
+    command: List[str], cwd: Path, timeout_s: float
+) -> subprocess.CompletedProcess:
+    """Like ``subprocess.run(capture_output=True, timeout=...)`` but launches the
+    child in its own process group and, on timeout, SIGKILLs the *whole* group.
+
+    A plain ``subprocess.run`` timeout only kills the direct child (``make``). The
+    grandchildren it spawned (iverilog/vvp/verilated sim) survive, keep the stdout
+    pipe open, and make the internal ``communicate()`` block forever -- turning a
+    single runaway testbench into a permanent hang that stalls the entire worker
+    pool. Killing the group closes the pipe so the timeout is actually enforced.
+    """
+    with subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    ) as proc:
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
+            # The group is dead now, so the pipes close and this drains promptly.
+            stdout, stderr = proc.communicate()
+            raise subprocess.TimeoutExpired(command, timeout_s, output=stdout, stderr=stderr)
+    return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
+
+
 def evaluate_realbench_code(task: RealBenchTask, code: str, args: argparse.Namespace) -> RealBenchEvalResult:
     if args.realbench_verifier == "harness":
         return evaluate_realbench_code_with_harness(task, code, args)
@@ -1853,13 +1887,10 @@ def evaluate_realbench_code_native(task: RealBenchTask, code: str, args: argpars
                 top_path.unlink()
             top_path.write_text(code, encoding="utf-8")
             t0 = time.perf_counter()
-            completed = subprocess.run(
+            completed = _run_capture_group(
                 [args.make_bin, "all"],
                 cwd=temp_dir,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=args.verification_timeout_s,
+                timeout_s=args.verification_timeout_s,
             )
             elapsed = time.perf_counter() - t0
     except subprocess.TimeoutExpired as exc:
@@ -1904,13 +1935,10 @@ def evaluate_realbench_code_with_harness(task: RealBenchTask, code: str, args: a
         with tempfile.TemporaryDirectory(prefix=f"realbench_harness_{task.task}_") as temp_name:
             code_path = Path(temp_name) / f"{task.task}_top.sv"
             code_path.write_text(code, encoding="utf-8")
-            completed = subprocess.run(
+            completed = _run_capture_group(
                 [sys.executable, "-c", runner, task.level, task.system, task.task, str(code_path)],
                 cwd=root,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=args.verification_timeout_s + 30,
+                timeout_s=args.verification_timeout_s + 30,
             )
     except subprocess.TimeoutExpired as exc:
         return RealBenchEvalResult(0, 0, error=f"RealBench harness timeout: {exc}")
@@ -2095,16 +2123,25 @@ def run_realbench(args: argparse.Namespace) -> Dict[str, Any]:
     else:
         rag = build_rag_runtime(args, output_dir, tasks, catalogs)
         records = []
-        with ThreadPoolExecutor(max_workers=max(args.concurrency, 1)) as executor:
+        # Stream each record to disk the moment it lands so a hung eval or a manual
+        # kill still leaves partial results behind; write_records() rewrites the
+        # sorted canonical file once the pool drains and the partial is removed.
+        partial_path = output_dir / "records.partial.jsonl"
+        with partial_path.open("w", encoding="utf-8") as partial, ThreadPoolExecutor(
+            max_workers=max(args.concurrency, 1)
+        ) as executor:
             futures = [executor.submit(run_one, item, args, output_dir, catalogs, rag) for item in items]
             for future in as_completed(futures):
                 record = future.result()
                 records.append(record)
+                partial.write(dumps_json(record) + "\n")
+                partial.flush()
                 status = "PASS" if record["passed"] else "FAIL"
                 print(
                     f"[realbench] {status} {record['task_level']}/{record['system']}/{record['task']} "
                     f"sample {int(record['sample']):02d} syntax={record['syntax']} function={record['function']}"
                 )
+        partial_path.unlink(missing_ok=True)
 
     elapsed_s = time.perf_counter() - start
     write_records(output_dir / "records.jsonl", records)

@@ -521,7 +521,13 @@ def run_realbench_direct(args: argparse.Namespace) -> Dict[str, Any]:
     else:
         client = make_client(args)
         records = []
-        with ThreadPoolExecutor(max_workers=max(args.concurrency, 1)) as executor:
+        # Stream each record to disk the moment it lands so a hung eval or a manual
+        # kill still leaves partial results behind; write_records() rewrites the
+        # sorted canonical file once the pool drains and the partial is removed.
+        partial_path = output_dir / "records.partial.jsonl"
+        with partial_path.open("w", encoding="utf-8") as partial, ThreadPoolExecutor(
+            max_workers=max(args.concurrency, 1)
+        ) as executor:
             futures = [
                 executor.submit(run_one_direct, item, args, output_dir, catalogs[item.task.task_id], client)
                 for item in items
@@ -529,11 +535,14 @@ def run_realbench_direct(args: argparse.Namespace) -> Dict[str, Any]:
             for future in as_completed(futures):
                 record = future.result()
                 records.append(record)
+                partial.write(dumps_json(record) + "\n")
+                partial.flush()
                 status = "PASS" if record["passed"] else "FAIL"
                 print(
                     f"[realbench-direct] {status} {record['task_level']}/{record['system']}/{record['task']} "
                     f"sample {int(record['sample']):02d} syntax={record['syntax']} function={record['function']}"
                 )
+        partial_path.unlink(missing_ok=True)
 
     elapsed_s = time.perf_counter() - start
     write_records(output_dir / "records.jsonl", records)
