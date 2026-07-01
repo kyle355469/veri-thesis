@@ -487,8 +487,10 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Tier-1 routing: after the plan is generated, judge it (rag_rtl.routing.decide_plan); "
-        "if it reads as a wrapper/thin module, discard the plan and generate directly instead of "
-        "running the legacy RTL+repair stage. The discarded plan is the only wasted compute.",
+        "if it reads as a self-contained algorithmic module (which the pipeline's reuse machinery "
+        "would derail), discard the plan and generate directly instead of running the legacy "
+        "RTL+repair stage. Wrapper/integration modules stay in the pipeline. The discarded plan "
+        "is the only wasted compute.",
     )
     parser.add_argument(
         "--plan-probe-include",
@@ -818,8 +820,9 @@ def run_one(
             planner_result = run_planner(task, catalog, args, plan_dir, spec_bundle.planner, planner_repository)
             plan_report_path.write_text(dumps_plan_result(planner_result), encoding="utf-8")
 
-            # Tier-1 plan-probe: judge the plan; a wrapper/thin module skips the heavy
-            # legacy RTL+repair stage and is generated directly (the plan is discarded).
+            # Tier-1 plan-probe: judge the plan; a self-contained algorithmic module (which the
+            # pipeline would derail) bails to direct generation, discarding the plan. Wrapper/
+            # integration modules stay in the pipeline (they need its retrieved interfaces).
             if plan_probe_enabled(task, args):
                 routed_by = "plan_probe"
                 route_decision = routing.decide_plan(planner_result.to_dict())
@@ -827,9 +830,33 @@ def run_one(
             if route_decision == "direct":
                 from scripts.run_realbench_direct_model import run_direct_generation  # lazy: import cycle
 
-                direct_gen = run_direct_generation(task, direct_args_shim(args), get_direct_client(args))
+                direct_client = get_direct_client(args)
+                direct_gen = run_direct_generation(task, direct_args_shim(args), direct_client)
                 code = normalize_code(direct_gen.code, task.top_module)
                 flow_taken = "direct"
+                # The downgrade skips planning, not repair: give the directly
+                # generated RTL the same syntax/lint + (optional) functional repair
+                # budget the pipeline path gets, reusing the direct client.
+                if code and (args.legacy_max_repair_attempts > 0 or args.legacy_functional_repair):
+                    legacy_result = repair_direct_code(
+                        task,
+                        code,
+                        args,
+                        catalog=catalog,
+                        workspace_dir=legacy_workspace,
+                        spec_text=spec_bundle.generation,
+                        max_repair_attempts=args.legacy_max_repair_attempts,
+                        functional_repair=args.legacy_functional_repair,
+                        max_functional_repair_attempts=args.legacy_max_functional_repair_attempts,
+                        skip_internal_verify=args.legacy_skip_internal_verify,
+                        lint_with_testbench=args.legacy_lint_with_testbench,
+                        repair_spec_slice=args.legacy_repair_spec_slice,
+                        repair_spec_slice_max_chars=args.legacy_repair_spec_slice_max_chars,
+                        max_tokens=args.legacy_max_tokens,
+                        llm_client=direct_client,
+                    )
+                    legacy_report_path.write_text(dumps_json(legacy_result.to_dict(), indent=2), encoding="utf-8")
+                    code = normalize_code(legacy_result.rtl, task.top_module)
             else:
                 legacy_plan = agentic_plan_from_payload(planner_result.to_dict())
                 enrich_legacy_plan_with_sources(legacy_plan, catalog, task, args)
@@ -1028,11 +1055,12 @@ def make_legacy_agent(
     config: LegacyConfig,
     repair_cache: Any = None,
     functional_verifier: Any = None,
+    llm_client: Any = None,
 ) -> LegacyAgent:
     embedder = HashingEmbedder(dim=128)
     retrieval_context = RetrievalContext.from_store(VectorStore([], embedder.encode([])), embedder)
     return LegacyAgent(
-        make_legacy_llm(args),
+        llm_client if llm_client is not None else make_legacy_llm(args),
         retrieval_context,
         verifier,
         config,
@@ -1350,6 +1378,37 @@ def effective_spec(
         return bundle
 
 
+def build_realbench_verifiers(
+    task: RealBenchTask,
+    args: argparse.Namespace,
+    *,
+    skip_internal_verify: bool,
+    lint_with_testbench: bool,
+    functional_repair: bool,
+) -> Tuple[Any, Any]:
+    """Construct the (syntax/lint verifier, functional verifier) pair the repair
+    loops use. Shared by the plan-driven legacy generator and the plan-free direct
+    flow so both see the SAME internal-lint file set and the same testbench-backed
+    functional verdict (which delegates to evaluate_realbench_code), guaranteeing
+    in-loop and final scoring agree on identical code."""
+    if skip_internal_verify:
+        verifier: Any = NoopVerifier()
+    else:
+        wno_flags, makefile_top = makefile_lint_settings(task)
+        if args.eval_wno_timescalemod and TIMESCALEMOD_WNO not in wno_flags:
+            wno_flags = [*wno_flags, TIMESCALEMOD_WNO]
+        include_testbench = bool(lint_with_testbench and makefile_top)
+        verifier = RealBenchWorkspaceVerifier(
+            verilator_bin=args.verilator_bin,
+            timeout_s=args.agent_timeout_s,
+            extra_sources=internal_verify_sources(task, include_testbench=include_testbench),
+            wno_flags=wno_flags or None,
+            lint_top=makefile_top if include_testbench else None,
+        )
+    functional_verifier = RealBenchFunctionalVerifier(task, args) if functional_repair else None
+    return verifier, functional_verifier
+
+
 def run_legacy_generator(
     task: RealBenchTask,
     plan: IpReusePlan,
@@ -1359,22 +1418,12 @@ def run_legacy_generator(
     spec_text: str,
     repair_cache: Any = None,
 ) -> Any:
-    if args.legacy_skip_internal_verify:
-        verifier: Any = NoopVerifier()
-    else:
-        wno_flags, makefile_top = makefile_lint_settings(task)
-        if args.eval_wno_timescalemod and TIMESCALEMOD_WNO not in wno_flags:
-            wno_flags = [*wno_flags, TIMESCALEMOD_WNO]
-        include_testbench = bool(args.legacy_lint_with_testbench and makefile_top)
-        verifier = RealBenchWorkspaceVerifier(
-            verilator_bin=args.verilator_bin,
-            timeout_s=args.agent_timeout_s,
-            extra_sources=internal_verify_sources(task, include_testbench=include_testbench),
-            wno_flags=wno_flags or None,
-            lint_top=makefile_top if include_testbench else None,
-        )
-    functional_verifier = (
-        RealBenchFunctionalVerifier(task, args) if args.legacy_functional_repair else None
+    verifier, functional_verifier = build_realbench_verifiers(
+        task,
+        args,
+        skip_internal_verify=args.legacy_skip_internal_verify,
+        lint_with_testbench=args.legacy_lint_with_testbench,
+        functional_repair=args.legacy_functional_repair,
     )
     agent = make_legacy_agent(
         args,
@@ -1416,6 +1465,73 @@ def run_legacy_generator(
         top_module=task.top_module,
         workspace_dir=workspace_dir,
         original_spec=clip_text(spec_text, spec_cap),
+        reuse_modules=provided_signatures,
+        environment_notes=build_environment_notes(task, provided_signatures, inline_signatures, args),
+    )
+
+
+def repair_direct_code(
+    task: RealBenchTask,
+    code: str,
+    args: argparse.Namespace,
+    *,
+    catalog: CatalogBundle,
+    workspace_dir: Path,
+    spec_text: str,
+    max_repair_attempts: int,
+    functional_repair: bool,
+    max_functional_repair_attempts: int,
+    skip_internal_verify: bool,
+    lint_with_testbench: bool,
+    repair_spec_slice: bool,
+    repair_spec_slice_max_chars: int,
+    max_tokens: int,
+    llm_client: Any = None,
+) -> Any:
+    """Run the syntax/lint + (optional) functional repair loops on RTL produced by
+    the plan-free direct flow, reusing the legacy agent's repair_rtl (plan=None).
+
+    The compile-environment facts (provided-module signatures, testbench port
+    contract, defines) are injected the same way the pipeline does — they come
+    from the eval template, not a plan, so this stays a no-planning flow while
+    still avoiding MODDUP/PINNOTFOUND in the repaired code. ``llm_client`` lets the
+    caller reuse the direct-generation client instead of opening a second one."""
+    verifier, functional_verifier = build_realbench_verifiers(
+        task,
+        args,
+        skip_internal_verify=skip_internal_verify,
+        lint_with_testbench=lint_with_testbench,
+        functional_repair=functional_repair,
+    )
+    agent = make_legacy_agent(
+        args,
+        verifier,
+        LegacyConfig(
+            target_hdl="verilog",
+            max_repair_attempts=max_repair_attempts,
+            temperature=args.temperature,
+            max_tokens=max_tokens,
+            enable_functional_repair=functional_repair,
+            max_functional_repair_attempts=max_functional_repair_attempts,
+            enable_repair_spec_slice=repair_spec_slice,
+            repair_spec_slice_max_chars=repair_spec_slice_max_chars,
+        ),
+        functional_verifier=functional_verifier,
+        llm_client=llm_client,
+    )
+    provided_signatures, inline_signatures = reuse_module_signatures(task, catalog)
+    provided_signatures = {
+        name: clip_text(signature, args.reuse_signature_max_chars)
+        for name, signature in provided_signatures.items()
+    }
+    original_spec = clip_text(spec_text, max(20000, repair_spec_slice_max_chars)) if spec_text else None
+    return agent.repair_rtl(
+        code,
+        plan=None,
+        target_hdl="verilog",
+        top_module=task.top_module,
+        workspace_dir=workspace_dir,
+        original_spec=original_spec,
         reuse_modules=provided_signatures,
         environment_notes=build_environment_notes(task, provided_signatures, inline_signatures, args),
     )

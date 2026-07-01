@@ -174,7 +174,7 @@ Top module: {top}
 
 
 def build_repair_prompt(
-    plan: IpReusePlan,
+    plan: Optional[IpReusePlan],
     rtl: str,
     diagnostics: List[Dict[str, Any]],
     target_hdl: str,
@@ -185,7 +185,6 @@ def build_repair_prompt(
     environment_notes: Optional[Iterable[str]] = None,
     repair_hints: Optional[List[str]] = None,
 ) -> str:
-    plan_json = json.dumps(asdict(plan), default=json_default, indent=2)
     context = _generation_context_sections(original_spec, reuse_modules, environment_notes)
     hints_section = ""
     if repair_hints:
@@ -196,17 +195,25 @@ def build_repair_prompt(
                 "(advisory only; adapt the pattern, do not copy unrelated code or module names):\n"
                 f"{hint_text}\n\n"
             )
+    # The direct flow repairs RTL generated straight from the spec, with no plan:
+    # drop the reuse framing and plan block so the prompt stays grounded on the
+    # spec/diagnostics alone. When a plan is present the output is unchanged.
+    if plan is not None:
+        plan_json = json.dumps(asdict(plan), default=json_default, indent=2)
+        intent_block = (
+            "Keep the same IP reuse intent and public top-level behavior.\n"
+            "Reused modules listed as provided source files must only be instantiated, never re-declared in your output.\n"
+        )
+        plan_block = f"IP reuse plan:\n{plan_json}\n\n"
+    else:
+        intent_block = "Keep the public top-level behavior described in the specification.\n"
+        plan_block = ""
     return f"""Repair this integrated {target_hdl} RTL so it passes syntax and lint checks.
-Keep the same IP reuse intent and public top-level behavior.
-Reused modules listed as provided source files must only be instantiated, never re-declared in your output.
-Return exactly one fenced {target_hdl} code block and no extra prose.
+{intent_block}Return exactly one fenced {target_hdl} code block and no extra prose.
 
 Top module: {top_module or "unknown"}
 
-{context}IP reuse plan:
-{plan_json}
-
-{hints_section}Diagnostics:
+{context}{plan_block}{hints_section}Diagnostics:
 {json.dumps(diagnostics, default=json_default, indent=2)}
 
 Current RTL:
@@ -216,7 +223,7 @@ Current RTL:
 
 
 def build_functional_repair_prompt(
-    plan: IpReusePlan,
+    plan: Optional[IpReusePlan],
     rtl: str,
     function_info: str,
     target_hdl: str,
@@ -233,21 +240,26 @@ def build_functional_repair_prompt(
     interface; the failure is logical (outputs mismatch the reference). The
     behavioral_slice, when provided, replaces the full original_spec as the
     behavioral context (Part B spec slicing); until then the whole spec is used.
+    A ``None`` plan (direct flow) drops the reuse framing and plan block.
     """
-    plan_json = json.dumps(asdict(plan), default=json_default, indent=2)
     context = _generation_context_sections(behavioral_slice or original_spec, reuse_modules, environment_notes)
     mismatch = function_info.strip() or "the reference testbench reported output mismatches"
+    if plan is not None:
+        plan_json = json.dumps(asdict(plan), default=json_default, indent=2)
+        intent_line = (
+            "Keep the same IP reuse intent. Reused modules listed as provided source files must only be instantiated, never re-declared in your output.\n"
+        )
+        plan_block = f"IP reuse plan:\n{plan_json}\n\n"
+    else:
+        intent_line = ""
+        plan_block = ""
     return f"""This integrated {target_hdl} RTL compiles cleanly but produces outputs that do not match the reference testbench. Fix the internal logic so the outputs match.
 Do NOT change the module's port interface (names, directions, widths) — it already matches the testbench, so changing it would regress. Correct only the behavior/logic.
-Keep the same IP reuse intent. Reused modules listed as provided source files must only be instantiated, never re-declared in your output.
-Return exactly one fenced {target_hdl} code block and no extra prose.
+{intent_line}Return exactly one fenced {target_hdl} code block and no extra prose.
 
 Top module: {top_module or "unknown"}
 
-{context}IP reuse plan:
-{plan_json}
-
-Reference testbench mismatch report (each line names an output, its mismatch count, and the first mismatched simulation time — concentrate on the logic that drives those outputs around that time):
+{context}{plan_block}Reference testbench mismatch report (each line names an output, its mismatch count, and the first mismatched simulation time — concentrate on the logic that drives those outputs around that time):
 {mismatch}
 
 Current RTL:

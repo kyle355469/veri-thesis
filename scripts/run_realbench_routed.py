@@ -7,11 +7,17 @@ Routing arms (``--router``):
 * ``all_pipeline`` / ``all_direct`` -- baselines (every task to one flow).
 * ``pre``        -- Tier-0 only: spec features (``--decider {keyword,llm}``) -> decide_pre,
                     ``uncertain`` resolved by size fallback. No plan generated for direct tasks.
-* ``plan_probe`` -- every task enters the pipeline; the per-sample plan-probe (Tier-1) downgrades
-                    wrapper/thin samples to direct (the discarded plan is the only waste).
-* ``cascade``    -- Tier-0 sends confident A->direct and confident B->pipeline; ``uncertain``
-                    tasks enter the pipeline with the plan-probe enabled. (main proposal)
-* ``oracle``     -- route by golden ``own_cells`` labels (routing ceiling; eval only).
+* ``plan_probe`` -- every task enters the pipeline; the per-sample plan-probe (Tier-1) bails
+                    self-contained-algorithm samples to direct (the discarded plan is the only waste).
+* ``cascade``    -- Tier-0 sends confident A(wrapper)->pipeline and confident B(self-contained)
+                    ->direct; ``uncertain`` tasks enter the pipeline with the plan-probe enabled.
+                    (main proposal)
+* ``oracle``     -- route by golden ``own_cells`` labels via CLASS_TO_FLOW (routing ceiling).
+
+Empirical polarity: wrapper/integration modules (A) pass under the pipeline (it supplies the
+sub-module interfaces they must wire); self-contained algorithmic modules (B) pass under direct
+(the pipeline's reuse machinery derails them). The flows are complementary, so *either* misroute
+loses a would-be pass -- routing accuracy, not "over-provisioning", is what matters.
 
 Forwarded flags (model, --concurrency, --legacy-functional-repair, ...) pass through to the
 underlying runners, exactly like run_realbench_combined.py.
@@ -53,6 +59,32 @@ from scripts.run_realbench_combined import _rate_block, _sub_args, read_records,
 from scripts.run_realbench_direct_model import build_parser as build_direct_parser, run_realbench_direct
 
 ROUTERS = ["all_pipeline", "all_direct", "pre", "plan_probe", "cascade", "oracle"]
+
+
+def _bool_flag(name: str, value: bool) -> List[str]:
+    return [f"--{name}" if value else f"--no-{name}"]
+
+
+def direct_repair_extra_args(pipe_args: argparse.Namespace) -> List[str]:
+    """Translate the pipeline's repair configuration into direct-runner flags so the
+    routed ``direct`` flow repairs its RTL with the same budget the pipeline would
+    (the direct flow skips planning, not repair). Emitted before the forwarded args
+    so an explicit direct-named flag the user passes still wins."""
+    extra: List[str] = [
+        "--max-repair-attempts", str(getattr(pipe_args, "legacy_max_repair_attempts", 2)),
+        "--max-functional-repair-attempts", str(getattr(pipe_args, "legacy_max_functional_repair_attempts", 2)),
+        "--repair-spec-slice-max-chars", str(getattr(pipe_args, "legacy_repair_spec_slice_max_chars", 24000)),
+        "--reuse-signature-max-chars", str(getattr(pipe_args, "reuse_signature_max_chars", 3000)),
+        "--testbench-contract-max-chars", str(getattr(pipe_args, "testbench_contract_max_chars", 8000)),
+        "--verilator-bin", str(getattr(pipe_args, "verilator_bin", "verilator")),
+        "--agent-timeout-s", str(getattr(pipe_args, "agent_timeout_s", 120)),
+    ]
+    extra += _bool_flag("functional-repair", bool(getattr(pipe_args, "legacy_functional_repair", False)))
+    extra += _bool_flag("repair-spec-slice", bool(getattr(pipe_args, "legacy_repair_spec_slice", False)))
+    extra += _bool_flag("lint-with-testbench", bool(getattr(pipe_args, "legacy_lint_with_testbench", True)))
+    extra += _bool_flag("skip-internal-verify", bool(getattr(pipe_args, "legacy_skip_internal_verify", False)))
+    extra += _bool_flag("eval-wno-timescalemod", bool(getattr(pipe_args, "eval_wno_timescalemod", True)))
+    return extra
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -115,7 +147,7 @@ def plan_routing(
             probe_tasks.append(name)
             meta[name] = {"routed_by": "plan_probe", "route_decision": None, "route_features": None}
         elif router == "oracle":
-            decision = "direct" if labels.get(name, "B") == "A" else "pipeline"
+            decision = routing.CLASS_TO_FLOW.get(labels.get(name, "B"), "direct")
             (direct_tasks if decision == "direct" else pipeline_tasks).append(name)
             meta[name] = {"routed_by": "oracle", "route_decision": decision, "route_features": None}
         elif router == "pre":
@@ -188,12 +220,25 @@ def run_routed(argv: Optional[Sequence[str]] = None) -> Dict[str, Any]:
         pipeline_records = read_records(pipeline_dir / "records.jsonl")
 
     if direct_tasks:
-        extra = []
+        include_extra: List[str] = []
         for name in direct_tasks:
-            extra += ["--include-exact", name]
-        direct_args = _sub_args(build_direct_parser, list(forwarded) + extra, args.samples, direct_dir, args.solution_name)
+            include_extra += ["--include-exact", name]
+        # Routed direct skips planning but still repairs: seed the direct runner with
+        # the pipeline's repair budget (overridable by any direct-named flag the user
+        # forwarded, which is parsed after these).
+        repair_extra = direct_repair_extra_args(discovery_args)
+        direct_args = _sub_args(
+            build_direct_parser,
+            repair_extra + list(forwarded) + include_extra,
+            args.samples,
+            direct_dir,
+            args.solution_name,
+        )
         direct_args.realbench_root = args.realbench_root
-        print(f"[routed] === direct model on {len(direct_tasks)} task(s) ===")
+        print(
+            f"[routed] === direct model on {len(direct_tasks)} task(s) "
+            f"(repair: syntax x{direct_args.max_repair_attempts}, functional={direct_args.functional_repair}) ==="
+        )
         run_realbench_direct(direct_args)
         direct_records = read_records(direct_dir / "records.jsonl")
 
@@ -258,7 +303,9 @@ def routed_summary(args: argparse.Namespace, merged: Sequence[Dict[str, Any]], l
     plans_generated = sum(1 for r in merged if r.get("plan_report_path") or r.get("planner_steps") is not None or r.get("routed_by") == "plan_probe")
     wasted_plans = sum(1 for r in merged if r.get("wasted_plan"))
 
-    # routing confusion vs oracle: rows=oracle label, cols=flow taken
+    # routing confusion vs oracle: rows=oracle class, cols=flow taken.
+    # Correct routing is A->pipeline and B->direct; A->direct and B->pipeline are misroutes
+    # that each lose a would-be pass (the flows are complementary, not nested).
     confusion = {"A->direct": 0, "A->pipeline": 0, "B->direct": 0, "B->pipeline": 0, "unlabeled": 0}
     for r in merged:
         lab = r.get("oracle_label")
@@ -289,8 +336,11 @@ def routed_summary(args: argparse.Namespace, merged: Sequence[Dict[str, Any]], l
             "pipeline_samples": len(pipeline_recs),
         },
         "routing_confusion": confusion,
-        "dangerous_misroute_B_to_direct": confusion["B->direct"],
-        "overspend_A_to_pipeline": confusion["A->pipeline"],
+        "correct_A_to_pipeline": confusion["A->pipeline"],
+        "correct_B_to_direct": confusion["B->direct"],
+        "misroute_A_to_direct": confusion["A->direct"],
+        "misroute_B_to_pipeline": confusion["B->pipeline"],
+        "misroutes_total": confusion["A->direct"] + confusion["B->pipeline"],
     }
 
 

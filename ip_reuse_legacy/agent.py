@@ -51,7 +51,14 @@ from .types import (
     AgenticIpReuseResult,
     IpReusePlan,
     LlmTrace,
+    SystemRequirements,
 )
+
+
+def _empty_plan() -> IpReusePlan:
+    """Placeholder plan for repair-only runs (the direct flow has no plan); kept
+    so AgenticIpReuseResult.plan / to_dict stay valid without plan content."""
+    return IpReusePlan(requirements=SystemRequirements(), modules=[], decisions=[])
 
 
 class AgenticIpReuseAgent(
@@ -199,6 +206,50 @@ class AgenticIpReuseAgent(
             environment_notes=environment_notes,
         )
 
+    def repair_rtl(
+        self,
+        rtl: str,
+        *,
+        plan: Optional[IpReusePlan] = None,
+        target_hdl: Optional[str] = None,
+        top_module: Optional[str] = None,
+        workspace_dir: Optional[str | Path] = None,
+        original_spec: Optional[str] = None,
+        reuse_modules: Optional[Dict[str, str]] = None,
+        environment_notes: Optional[List[str]] = None,
+    ) -> AgenticIpReuseResult:
+        """Run the syntax/lint repair loop (and the optional functional repair
+        loop) on already-generated RTL, skipping plan-driven generation entirely.
+
+        The direct routing flow produces RTL straight from the spec without a
+        plan; it reuses the same battle-tested repair loops here. ``plan`` is
+        ``None`` for that flow (the repair prompts then drop the reuse framing);
+        passing a plan is supported for callers that have one.
+        """
+        target = target_hdl or self.config.target_hdl
+        llm_traces: List[LlmTrace] = []
+        self._stage(
+            "agent_start",
+            "running",
+            top_module=top_module,
+            target_hdl=target,
+            source="direct_rtl",
+            rtl_chars=len(rtl),
+        )
+        return self._verify_and_repair(
+            rtl,
+            plan,
+            target=target,
+            top_module=top_module,
+            llm_traces=llm_traces,
+            retrieval_traces=[],
+            workspace_dir=workspace_dir,
+            original_spec=original_spec,
+            reuse_modules=reuse_modules,
+            environment_notes=environment_notes,
+            final_text=rtl,
+        )
+
     def condense_spec(
         self,
         prompt: str,
@@ -320,6 +371,39 @@ class AgenticIpReuseAgent(
         )
         rtl = extract_code(final_text)
         self._stage("rtl_generation", "complete", rtl_chars=len(rtl))
+        return self._verify_and_repair(
+            rtl,
+            plan,
+            target=target,
+            top_module=top_module,
+            llm_traces=llm_traces,
+            retrieval_traces=retrieval_traces,
+            workspace_dir=workspace_dir,
+            original_spec=original_spec,
+            reuse_modules=reuse_modules,
+            environment_notes=environment_notes,
+            final_text=final_text,
+        )
+
+    def _verify_and_repair(
+        self,
+        rtl: str,
+        plan: Optional[IpReusePlan],
+        *,
+        target: str,
+        top_module: Optional[str],
+        llm_traces: List[LlmTrace],
+        retrieval_traces: List[Dict[str, Any]],
+        workspace_dir: Optional[str | Path] = None,
+        original_spec: Optional[str] = None,
+        reuse_modules: Optional[Dict[str, str]] = None,
+        environment_notes: Optional[List[str]] = None,
+        final_text: str = "",
+    ) -> AgenticIpReuseResult:
+        """Syntax/lint repair loop plus the optional functional repair loop on
+        already-produced ``rtl``. Shared by plan-driven generation
+        (_run_rtl_generation_from_plan) and the plan-free direct flow
+        (repair_rtl); a ``None`` plan keeps the repair prompts spec-only."""
         self._stage("verification", "running", top_module=top_module)
         verification = self._verify_or_empty(rtl, top_module)
         self._stage("verification", "complete", passed=verification.passed)
@@ -426,7 +510,7 @@ class AgenticIpReuseAgent(
             )
 
         result = AgenticIpReuseResult(
-            plan=plan,
+            plan=plan if plan is not None else _empty_plan(),
             rtl=rtl,
             final_text=final_text,
             verification=verification,

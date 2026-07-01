@@ -13,8 +13,14 @@ Three tiers, each usable independently (see scripts/run_realbench_routed.py):
 
 The deciders are deterministic so the routing decision is auditable and diffable;
 the only model call is the optional LLM feature extractor (Tier-0, ``--decider llm``).
-``decide_plan`` is intentionally biased toward ``pipeline`` on ambiguity because the
-costly error is B->direct (a hard task sent single-shot fails), not A->pipeline.
+
+Empirically the two flows are COMPLEMENTARY, not nested. The pipeline's retrieval / reuse /
+integration / repair is exactly what wrapper & integration modules (class "A") need -- it
+supplies the external sub-module interfaces they must wire, which direct single-shot only
+hallucinates. But that same machinery invents spurious structure that derails self-contained
+algorithmic modules (class "B"), which direct writes cleanly in one shot. So **A passes under
+pipeline, B passes under direct**: routing sends A->pipeline and B->direct, and *either*
+misroute loses a would-be pass (there is no "safe" over-provision direction).
 """
 from __future__ import annotations
 
@@ -30,6 +36,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from rag_rtl.json_utils import dumps_json
+
+# Empirical routing polarity: structural/wrapper modules (class "A") pass under the
+# pipeline (it supplies the external sub-module interfaces they must wire); self-contained
+# algorithmic modules (class "B") pass under direct single-shot (the pipeline's reuse /
+# decomposition machinery invents structure and derails them). The flows are complementary.
+CLASS_TO_FLOW = {"A": "pipeline", "B": "direct"}
 
 # --------------------------------------------------------------------------- #
 # Features
@@ -216,10 +228,12 @@ def decide_pre(feats: RouteFeatures, confidence_tau: float = 0.5) -> str:
     """Spec pre-route decision: ``"direct"`` | ``"pipeline"`` | ``"uncertain"``."""
     if feats.source == "llm" and feats.confidence < confidence_tau:
         return "uncertain"
+    # Self-contained algorithm / state -> direct (the pipeline's scaffolding derails it).
     if feats.has_fsm or feats.has_cdc or feats.has_algorithm:
-        return "pipeline"
-    if feats.delegates_to_submodules or feats.is_memory or feats.thin_control:
         return "direct"
+    # Wrapper / thin / memory -> pipeline (needs the retrieved sub-module interfaces).
+    if feats.delegates_to_submodules or feats.is_memory or feats.thin_control:
+        return "pipeline"
     return "uncertain"
 
 
@@ -229,7 +243,9 @@ def size_fallback(spec: str) -> str:
     ports = len(re.findall(r"\|\s*(input|output|inout)\b", body, re.I)) or len(
         re.findall(r"\b(input|output|inout)\b", body, re.I)
     )
-    return "pipeline" if (len(body) > 9000 or ports > 25) else "direct"
+    # Larger/wider specs skew toward self-contained algorithmic modules (Set B -> direct);
+    # short specs skew toward thin wrappers/integration (Set A -> pipeline).
+    return "direct" if (len(body) > 9000 or ports > 25) else "pipeline"
 
 
 def route_pre(
@@ -286,11 +302,14 @@ def _unwrap_plan(planner_result_dict: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def decide_plan(planner_result_dict: Dict[str, Any]) -> str:
-    """Judge the structured plan -> ``"direct"`` | ``"pipeline"``.
+    """Judge the structured plan -> ``"pipeline"`` (keep) | ``"direct"`` (bail).
 
-    Reads the plan's natural-language ``requirements.functionality`` + ``ppa_constraints.area``
-    (NOT the module/reuse counts, which the planner over/under-decomposes). Defaults to
-    ``pipeline`` so an unclear plan never falsely routes a hard task to single-shot.
+    ``"pipeline"`` = a wrapper/integration module that needs the pipeline's interface wiring;
+    ``"direct"`` = a self-contained algorithmic module the pipeline would derail, so discard
+    the plan and generate directly. Reads the plan's natural-language ``requirements.functionality``
+    + ``ppa_constraints.area`` (NOT the module/reuse counts, which the planner over/under-
+    decomposes). Defaults to ``pipeline`` when unclear -- the plan is already a sunk cost, so
+    only bail to direct when the module is clearly self-contained.
     """
     plan = _unwrap_plan(planner_result_dict)
     req = plan.get("requirements")
@@ -305,12 +324,14 @@ def decide_plan(planner_result_dict: Dict[str, Any]) -> str:
         area = ""
     text = f"{func} {area}"
     own_impl = bool(_PLAN_OWNIMPL_RE.search(func))
-    # Decisive delegation: explicit wrapper/reuse phrasing, or "instantiates/integrates"
-    # without any own-implementation verb (the real work is in the submodule).
+    # Decisive delegation (explicit wrapper/reuse, or "instantiates/integrates" without an
+    # own-implementation verb): this module needs the pipeline's interface wiring -> keep it.
     if _PLAN_WRAP_RE.search(text) or (_PLAN_INST_RE.search(func) and not own_impl):
-        return "direct"
-    if _PLAN_PIPE_RE.search(text):
         return "pipeline"
+    # Self-contained algorithm -> bail to direct (discard the plan).
+    if _PLAN_PIPE_RE.search(text):
+        return "direct"
+    # Unclear: keep the pipeline (sunk-cost plan); only bail when clearly self-contained.
     return "pipeline"
 
 
@@ -386,10 +407,12 @@ def oracle_label(
     top: Optional[str] = None,
     dep_files: Optional[List[Path]] = None,
 ) -> Dict[str, Any]:
-    """Ground-truth A/B label for ``task`` from the golden RTL (eval only).
+    """Ground-truth A/B class + target flow for ``task`` from the golden RTL (eval only).
 
-    A (direct) if the module is a pure delegation / regular-array wrapper, or its own
-    synthesized logic is below :data:`OWN_CELLS_THRESHOLD`; else B (pipeline).
+    Class ``"A"`` (structural/wrapper/thin -> **pipeline**) if the module is a pure delegation /
+    regular-array wrapper or its own synthesized logic is below :data:`OWN_CELLS_THRESHOLD`;
+    else class ``"B"`` (self-contained core -> **direct**). The ``flow`` field is the target
+    flow via :data:`CLASS_TO_FLOW`.
 
     ``dep_files`` lets the caller supply the module's dependency sources so hierarchical
     modules synthesize (and report an accurate ``own_cells``); without them such modules
@@ -406,7 +429,7 @@ def oracle_label(
     # the very slow synth of RAM-backed wrappers (e203_*_ram, e203_srams) whose own logic
     # is ~0 anyway.
     if counts["insts"] >= 2 and counts["always"] == 0 and counts["case"] == 0 and counts["assign"] <= 15:
-        return {"label": "A", "reason": "wrapper/regular", "own_cells": None, **counts}
+        return {"label": "A", "flow": CLASS_TO_FLOW["A"], "reason": "wrapper/regular", "own_cells": None, **counts}
 
     incdirs = _include_dirs(root, family)
     extra = list(dep_files or [])
@@ -424,6 +447,7 @@ def oracle_label(
 
     return {
         "label": label,
+        "flow": CLASS_TO_FLOW[label],
         "reason": reason,
         "own_cells": own,
         "insts": counts["insts"],

@@ -4,7 +4,7 @@
 Reads several arm run dirs (each a ``runs/<arm>/`` with ``records.jsonl``) produced by
 run_realbench_routed.py / run_realbench_combined.py and emits one markdown table on the
 **cost-at-fixed-quality** axis: combined pass@k (quality), planner+repair compute (cost),
-and routing accuracy vs the golden oracle labels (B->direct is the costly error).
+and routing accuracy vs the golden oracle labels (A->direct and B->pipeline are the misroutes).
 
 Usage::
 
@@ -74,8 +74,10 @@ def arm_row(name: str, records: Sequence[Dict[str, Any]], ks: Sequence[int]) -> 
     wasted = sum(1 for r in records if r.get("wasted_plan"))
     tokens = sum(_num(r, "llm_token_estimate") for r in records)
     wall = sum(_num(r, "wall_s") for r in records)
-    b_to_direct = sum(1 for r in records if r.get("oracle_label") == "B" and r.get("flow") == "direct")
-    a_to_pipeline = sum(1 for r in records if r.get("oracle_label") == "A" and r.get("flow") == "pipeline")
+    # Correct routing: A(wrapper)->pipeline, B(self-contained)->direct.
+    # Misroutes (each loses a would-be pass): A->direct and B->pipeline.
+    mis_a = sum(1 for r in records if r.get("oracle_label") == "A" and r.get("flow") == "direct")
+    mis_b = sum(1 for r in records if r.get("oracle_label") == "B" and r.get("flow") == "pipeline")
     return {
         "arm": name,
         "samples": n,
@@ -86,8 +88,8 @@ def arm_row(name: str, records: Sequence[Dict[str, Any]], ks: Sequence[int]) -> 
         "wasted_plans": wasted,
         "tokens": tokens,
         "wall_s": wall,
-        "B_to_direct": b_to_direct,
-        "A_to_pipeline": a_to_pipeline,
+        "misroute_A_to_direct": mis_a,
+        "misroute_B_to_pipeline": mis_b,
     }
 
 
@@ -96,10 +98,12 @@ def render(rows: List[Dict[str, Any]], ks: Sequence[int]) -> str:
     lines = [
         "# Routing ablation",
         "",
-        "Headline axis: **cost at fixed quality** — match all_pipeline pass@k at lower compute,",
-        "while keeping the costly **B→direct** misroute near the oracle (0).",
+        "The flows are complementary: wrapper/integration modules (A) pass under the pipeline,",
+        "self-contained algorithmic modules (B) pass under direct. Correct routing = A→pipeline,",
+        "B→direct; **both** misroutes (A→direct, B→pipeline) lose a would-be pass. Headline: reach",
+        "the union pass@k (combined baseline) at the lowest compute while keeping misroutes near 0.",
         "",
-        f"| arm | samples | pipe/direct | {pak_cols} | plans | wasted | tokens | wall_s | B→direct | A→pipe |",
+        f"| arm | samples | pipe/direct | {pak_cols} | plans | wasted | tokens | wall_s | A→direct✗ | B→pipe✗ |",
         "|---|--:|--:|" + "--:|" * len(ks) + "--:|--:|--:|--:|--:|--:|",
     ]
     for r in rows:
@@ -107,7 +111,7 @@ def render(rows: List[Dict[str, Any]], ks: Sequence[int]) -> str:
         lines.append(
             f"| {r['arm']} | {r['samples']} | {r['pipeline']}/{r['direct']} | {pak} | "
             f"{r['plans']} | {r['wasted_plans']} | {r['tokens']:.0f} | {r['wall_s']:.0f} | "
-            f"{r['B_to_direct']} | {r['A_to_pipeline']} |"
+            f"{r['misroute_A_to_direct']} | {r['misroute_B_to_pipeline']} |"
         )
     lines += [
         "",

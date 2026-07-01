@@ -2,8 +2,15 @@
 """Direct RealBench spec-to-RTL baseline.
 
 This runner feeds each RealBench problem prompt directly to the served model,
-saves the first generated RTL, and evaluates it with the RealBench testbench.
-It intentionally does not use RAG, planning, tool calls, or repair.
+saves the generated RTL, and evaluates it with the RealBench testbench. It uses
+no RAG, planning, or tool calls.
+
+Repair is OFF by default, so the bare runner stays a true zero-repair baseline.
+When ``--max-repair-attempts`` (>0) and/or ``--functional-repair`` are set the
+directly generated RTL is run through the shared syntax/lint + (optional)
+testbench-driven functional repair loops (no plan involved). The router
+(run_realbench_routed.py) turns these on for its ``direct`` flow so a routed task
+still gets repaired without paying for planning.
 """
 
 from __future__ import annotations
@@ -36,8 +43,11 @@ from scripts.run_agentic_plan_legacy_realbench import (
     discover_tasks,
     evaluate_realbench_code,
     generated_code_path,
+    normalize_code,
     record_sort_key,
+    repair_direct_code,
     safe_rate,
+    strip_dependency_redeclarations,
     task_constraints,
     template_provided_module_names,
     work_items,
@@ -106,7 +116,76 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--make-bin", default="make")
     parser.add_argument("--verification-timeout-s", type=int, default=120)
+
+    # --- Repair loops (off by default: bare runner stays a zero-repair baseline) ---
+    parser.add_argument(
+        "--max-repair-attempts",
+        type=int,
+        default=0,
+        help="Syntax/lint repair turns for the directly generated RTL (0 disables syntax repair). "
+        "The router sets this for its direct flow so routed tasks are repaired without planning.",
+    )
+    parser.add_argument(
+        "--functional-repair",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="After the design compiles, run testbench-driven (output-mismatch) repair turns. Uses "
+        "the same testbench that scores the benchmark, so this is a separate experimental arm.",
+    )
+    parser.add_argument(
+        "--max-functional-repair-attempts",
+        type=int,
+        default=2,
+        help="Maximum functional (testbench-driven) repair turns after the design compiles.",
+    )
+    parser.add_argument(
+        "--repair-spec-slice",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="In repair prompts, replace the full spec with the error-relevant slice.",
+    )
+    parser.add_argument("--repair-spec-slice-max-chars", type=int, default=24000)
+    parser.add_argument(
+        "--skip-internal-verify",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Skip the internal Verilator lint that drives the syntax repair loop.",
+    )
+    parser.add_argument(
+        "--lint-with-testbench",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include the testbench/reference files in the internal lint so it mirrors the eval "
+        "compile exactly (catches PINNOTFOUND/MODDUP).",
+    )
+    parser.add_argument(
+        "--eval-wno-timescalemod",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Add -Wno-TIMESCALEMOD to the in-loop lint and the final native eval (matches the "
+        "pipeline runner so in-loop and final verdicts agree).",
+    )
+    parser.add_argument("--verilator-bin", default="verilator")
+    parser.add_argument(
+        "--agent-timeout-s", type=int, default=120, help="Timeout for each internal Verilator lint."
+    )
+    parser.add_argument(
+        "--reuse-signature-max-chars",
+        type=int,
+        default=3000,
+        help="Per-module cap on the provided-module port signature injected into repair prompts.",
+    )
+    parser.add_argument(
+        "--testbench-contract-max-chars",
+        type=int,
+        default=8000,
+        help="Cap on the testbench DUT-instantiation snippet injected into repair prompts as the port contract.",
+    )
     return parser
+
+
+def repair_enabled(args: argparse.Namespace) -> bool:
+    return args.max_repair_attempts > 0 or args.functional_repair
 
 
 def make_client(args: argparse.Namespace) -> VllmClient:
@@ -193,6 +272,50 @@ def report_path(output_dir: Path, item: WorkItem) -> Path:
     return output_dir / "reports" / item.task.level / item.task.system / f"{item.task.task}_sample{item.sample:02d}.json"
 
 
+def repair_workspace_path(output_dir: Path, item: WorkItem) -> Path:
+    return output_dir / "repair_workspaces" / item.task.level / item.task.system / item.task.task / f"sample{item.sample:02d}"
+
+
+def repair_generated_code(
+    task: RealBenchTask,
+    code: str,
+    args: argparse.Namespace,
+    output_dir: Path,
+    item: WorkItem,
+    catalog: CatalogBundle,
+    client: Any,
+) -> tuple[str, Any]:
+    """Run the shared syntax/lint + (optional) functional repair loops on directly
+    generated RTL (no plan). Returns (final_code, repair_result). The repaired RTL
+    is normalised + dependency-stripped exactly like the pipeline so the final
+    score matches the in-loop functional verdict; on empty repair output the
+    original code is kept."""
+    workspace = repair_workspace_path(output_dir, item)
+    workspace.mkdir(parents=True, exist_ok=True)
+    result = repair_direct_code(
+        task,
+        code,
+        args,
+        catalog=catalog,
+        workspace_dir=workspace,
+        spec_text=task.prompt,
+        max_repair_attempts=args.max_repair_attempts,
+        functional_repair=args.functional_repair,
+        max_functional_repair_attempts=args.max_functional_repair_attempts,
+        skip_internal_verify=args.skip_internal_verify,
+        lint_with_testbench=args.lint_with_testbench,
+        repair_spec_slice=args.repair_spec_slice,
+        repair_spec_slice_max_chars=args.repair_spec_slice_max_chars,
+        max_tokens=args.max_tokens,
+        llm_client=client,
+    )
+    repaired = normalize_code(result.rtl, task.top_module)
+    if not repaired:
+        return code, result
+    repaired = strip_dependency_redeclarations(repaired, template_provided_module_names(task))
+    return (repaired if repaired.endswith("\n") else repaired + "\n"), result
+
+
 def run_one_direct(
     item: WorkItem,
     args: argparse.Namespace,
@@ -212,6 +335,7 @@ def run_one_direct(
     generation: Optional[DirectGeneration] = None
     generation_error: Optional[str] = None
     reused_existing = False
+    repair_result: Any = None
 
     if (args.resume or args.evaluate_only) and code_path.exists():
         code = code_path.read_text(encoding="utf-8")
@@ -227,6 +351,17 @@ def run_one_direct(
             raw_path.write_text(generation.raw_text, encoding="utf-8")
             code = generation.code
             if code:
+                # Direct generation skips planning; when repair is enabled the raw
+                # RTL still goes through the shared syntax/lint + functional loops.
+                # A repair crash is best-effort: keep the raw generation rather than
+                # discard an otherwise-valid candidate.
+                if repair_enabled(args):
+                    try:
+                        code, repair_result = repair_generated_code(
+                            task, code, args, output_dir, item, catalog, client
+                        )
+                    except Exception as exc:  # noqa: BLE001 - keep the benchmark moving.
+                        generation_error = f"repair failed (kept raw generation): {exc}"
                 code_path.write_text(code, encoding="utf-8")
             else:
                 generation_error = "model response did not contain parsable RTL"
@@ -249,6 +384,8 @@ def run_one_direct(
         reused_existing=reused_existing,
         eval_result=eval_result,
         generated=bool(code),
+        repair_result=repair_result,
+        args=args,
     )
     report.write_text(dumps_json(record, indent=2), encoding="utf-8")
     return record
@@ -266,8 +403,11 @@ def build_record(
     reused_existing: bool,
     eval_result: RealBenchEvalResult,
     generated: bool,
+    repair_result: Any = None,
+    args: Optional[argparse.Namespace] = None,
 ) -> Dict[str, Any]:
     task = item.task
+    repair_on = bool(args is not None and repair_enabled(args))
     return {
         "benchmark": "realbench",
         "pipeline": "direct_model",
@@ -285,6 +425,13 @@ def build_record(
         "generated": generated,
         "reused_existing": reused_existing,
         "generation_error": generation_error,
+        "direct_repair": repair_on,
+        "direct_repair_attempts": repair_result.repair_attempts if repair_result else None,
+        "direct_functional_repair": bool(args.functional_repair) if args is not None else False,
+        "direct_functional_repair_attempts": (
+            repair_result.functional_repair_attempts if repair_result else None
+        ),
+        "direct_in_loop_function_info": repair_result.function_info if repair_result else None,
         "generated_code_path": str(code_path) if generated else None,
         "raw_response_path": str(raw_path) if raw_path.exists() else None,
         "prompt_path": str(saved_prompt_path) if saved_prompt_path.exists() else None,
