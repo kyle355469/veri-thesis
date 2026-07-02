@@ -158,6 +158,8 @@ class TrackingVllmClient(VllmClient):
             "api_usage_requests": 0,
             "estimated_usage_requests": 0,
         }
+        # Per-task (thread-local) log of every serve request: start time + latency.
+        self._local.requests = []
 
     def current_usage(self) -> Dict[str, int]:
         usage = getattr(self._local, "usage", None)
@@ -165,6 +167,18 @@ class TrackingVllmClient(VllmClient):
             self.reset_usage()
             usage = self._local.usage
         return dict(usage)
+
+    def current_requests(self) -> List[Dict[str, Any]]:
+        """Per-request timing/token records made since the last reset_usage()."""
+        return list(getattr(self._local, "requests", None) or [])
+
+    def _record_request(self, record: Dict[str, Any]) -> None:
+        super()._record_request(record)
+        requests = getattr(self._local, "requests", None)
+        if requests is None:
+            self.reset_usage()
+            requests = self._local.requests
+        requests.append(record)
 
     def chat(
         self,
@@ -491,6 +505,7 @@ def run_one_with_usage(
     wall_s = time.perf_counter() - t0
     usage = client.current_usage() if client else zero_usage()
     usage_source = usage_source_label(usage)
+    request_log = client.current_requests() if client else []
     record.update(
         {
             "benchmark": benchmark,
@@ -502,6 +517,9 @@ def run_one_with_usage(
             "tokens_used": usage["total_tokens"],
             "llm_requests": usage["llm_requests"],
             "token_usage_source": usage_source,
+            # Per-serve-request start time + latency (+ tokens) for this task.
+            "llm_request_log": request_log,
+            "llm_latency_s": round(sum(float(r.get("latency_s") or 0) for r in request_log), 4),
         }
     )
     return record
@@ -598,6 +616,8 @@ def run_benchmark_mode(
             "total_repair_attempts": sum(numeric_or_zero(record.get("repair_attempts")) for record in records),
             "llm_requests": sum(int(record.get("llm_requests") or 0) for record in records),
             "token_usage_sources": count_values(record.get("token_usage_source") for record in records),
+            "total_llm_latency_s": round(sum(float(record.get("llm_latency_s") or 0) for record in records), 4),
+            "avg_llm_latency_s": average(record.get("llm_latency_s") for record in records),
         }
     )
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
@@ -776,6 +796,7 @@ def write_records_csv(path: Path, records: Sequence[Dict[str, Any]]) -> None:
         "tokens_used",
         "repair_attempts",
         "llm_requests",
+        "llm_latency_s",
         "token_usage_source",
         "generated",
         "syntax_passed",

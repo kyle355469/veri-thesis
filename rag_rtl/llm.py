@@ -237,7 +237,7 @@ class VllmClient:
             ok = False
             raise RuntimeError(f"vLLM request failed: {exc}") from exc
         finally:
-            self.request_log.append(
+            self._record_request(
                 {
                     "start_time": start_iso,
                     "start_epoch": start_epoch,
@@ -250,6 +250,11 @@ class VllmClient:
                 }
             )
         return body
+
+    def _record_request(self, record: Dict[str, Any]) -> None:
+        """Store one per-request timing/token record. Subclasses may override to
+        also capture the record in a per-task (thread-local) log."""
+        self.request_log.append(record)
 
 
 class StubLlmClient:

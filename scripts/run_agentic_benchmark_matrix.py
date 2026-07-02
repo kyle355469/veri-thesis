@@ -309,6 +309,8 @@ def run_benchmark(
             "avg_total_tokens": average(record.get("total_tokens") for record in records),
             "llm_requests": sum(int(record.get("llm_requests") or 0) for record in records),
             "token_usage_sources": count_values(record.get("token_usage_source") for record in records),
+            "total_llm_latency_s": round(sum(float(record.get("llm_latency_s") or 0) for record in records), 4),
+            "avg_llm_latency_s": average(record.get("llm_latency_s") for record in records),
             "avg_agent_steps": average(record.get("agent_steps") for record in records),
             "agent_used_tools": sum(1 for record in records if record.get("agent_used_tools")),
         }
@@ -340,6 +342,7 @@ def run_one_agentic(
     reused_existing = False
     usage = zero_usage()
     usage_source = "none"
+    request_log: List[Dict[str, Any]] = []
     wall_s = 0.0
 
     if (args.resume or args.evaluate_only) and code_path.exists():
@@ -364,6 +367,7 @@ def run_one_agentic(
         wall_s = time.perf_counter() - t0
         usage = client.current_usage()
         usage_source = usage_source_label(usage)
+        request_log = client.current_requests()
         if code:
             code_path.write_text(code, encoding="utf-8")
 
@@ -392,6 +396,7 @@ def run_one_agentic(
         eval_result=eval_result,
         usage=usage,
         usage_source=usage_source,
+        request_log=request_log,
         wall_s=wall_s,
     )
     return record
@@ -460,8 +465,10 @@ def build_record(
     eval_result: Any,
     usage: Dict[str, int],
     usage_source: str,
-    wall_s: float,
+    request_log: Optional[List[Dict[str, Any]]] = None,
+    wall_s: float = 0.0,
 ) -> Dict[str, Any]:
+    request_log = request_log or []
     base: Dict[str, Any] = {
         "benchmark": benchmark,
         "mode": MODE,
@@ -497,6 +504,9 @@ def build_record(
         "total_tokens": usage["total_tokens"],
         "llm_requests": usage["llm_requests"],
         "token_usage_source": usage_source,
+        # Per-serve-request start time + latency (+ tokens) for this task.
+        "llm_request_log": request_log,
+        "llm_latency_s": round(sum(float(r.get("latency_s") or 0) for r in request_log), 4),
     }
 
     if benchmark == "verilog-eval-v2-ntu":
@@ -695,6 +705,7 @@ def write_agent_records_csv(path: Path, records: Sequence[Dict[str, Any]]) -> No
         "agent_used_tools",
         "agent_stopped_reason",
         "llm_requests",
+        "llm_latency_s",
         "prompt_tokens",
         "completion_tokens",
         "total_tokens",
