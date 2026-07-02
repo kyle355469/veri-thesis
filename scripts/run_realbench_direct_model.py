@@ -337,6 +337,10 @@ def run_one_direct(
     reused_existing = False
     repair_result: Any = None
 
+    # Start this sample's serve-request log fresh (thread-local; this sample owns
+    # its worker thread), then snapshot it into the record below.
+    client.reset_request_log()
+
     if (args.resume or args.evaluate_only) and code_path.exists():
         code = code_path.read_text(encoding="utf-8")
         reused_existing = True
@@ -385,6 +389,7 @@ def run_one_direct(
         eval_result=eval_result,
         generated=bool(code),
         repair_result=repair_result,
+        request_log=client.current_requests(),
         args=args,
     )
     report.write_text(dumps_json(record, indent=2), encoding="utf-8")
@@ -404,10 +409,12 @@ def build_record(
     eval_result: RealBenchEvalResult,
     generated: bool,
     repair_result: Any = None,
+    request_log: Optional[Sequence[Dict[str, Any]]] = None,
     args: Optional[argparse.Namespace] = None,
 ) -> Dict[str, Any]:
     task = item.task
     repair_on = bool(args is not None and repair_enabled(args))
+    request_log = list(request_log or [])
     return {
         "benchmark": "realbench",
         "pipeline": "direct_model",
@@ -452,6 +459,9 @@ def build_record(
         "stderr_tail": eval_result.stderr_tail,
         "evaluation_error": eval_result.error,
         "wall_s": generation.wall_s if generation else 0.0,
+        # Per-serve-request start time + latency (+ tokens) for this sample.
+        "llm_request_log": request_log,
+        "llm_latency_s": round(sum(float(r.get("latency_s") or 0) for r in request_log), 4),
     }
 
 
@@ -463,6 +473,7 @@ def summarize(records: Sequence[Dict[str, Any]], tasks: Sequence[RealBenchTask],
     prompt_tokens = sum(record.get("estimated_prompt_tokens") or 0 for record in records)
     response_tokens = sum(record.get("estimated_response_tokens") or 0 for record in records)
     walls = [float(record.get("wall_s") or 0.0) for record in records]
+    llm_latencies = [float(record.get("llm_latency_s") or 0.0) for record in records]
     return {
         "benchmark": "realbench",
         "pipeline": "direct_model",
@@ -478,6 +489,8 @@ def summarize(records: Sequence[Dict[str, Any]], tasks: Sequence[RealBenchTask],
         "pass_rate": safe_rate(passed, total),
         "total_s": elapsed_s,
         "mean_wall_s": (sum(walls) / len(walls)) if walls else None,
+        "total_llm_latency_s": round(sum(llm_latencies), 4),
+        "mean_llm_latency_s": (round(sum(llm_latencies) / len(llm_latencies), 4)) if llm_latencies else None,
         "estimated_prompt_tokens": prompt_tokens or None,
         "estimated_response_tokens": response_tokens or None,
         "estimated_total_tokens": (prompt_tokens + response_tokens) or None,

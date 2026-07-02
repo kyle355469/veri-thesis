@@ -2,12 +2,36 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
+
+# Per-thread log of every LLM serve request (start time + latency + tokens).
+# Thread-local so concurrent samples don't mix, and module-level so it captures
+# every VllmClient instance created during a sample. Reset per sample, then read.
+_REQUEST_LOG = threading.local()
+
+
+def _current_request_log() -> List[Dict[str, Any]]:
+    entries = getattr(_REQUEST_LOG, "entries", None)
+    if entries is None:
+        entries = []
+        _REQUEST_LOG.entries = entries
+    return entries
+
+
+def reset_request_log() -> None:
+    """Clear the calling thread's serve-request log (call when a sample starts)."""
+    _REQUEST_LOG.entries = []
+
+
+def get_request_log() -> List[Dict[str, Any]]:
+    """Snapshot of serve-request records made by this thread since the last reset."""
+    return list(_current_request_log())
 
 
 @dataclass
@@ -16,8 +40,14 @@ class VllmClient:
     model: str = "siliconmind-server"
     api_key: str = "EMPTY"
     timeout_s: int = 1200
-    # One record per serve request: wall-clock start time and latency in seconds.
-    request_log: List[Dict[str, Any]] = field(default_factory=list)
+
+    @staticmethod
+    def reset_request_log() -> None:
+        reset_request_log()
+
+    @staticmethod
+    def current_requests() -> List[Dict[str, Any]]:
+        return get_request_log()
 
     @classmethod
     def from_env(cls) -> "VllmClient":
@@ -105,9 +135,8 @@ class VllmClient:
             )
 
     def _record_request(self, record: Dict[str, Any]) -> None:
-        """Store one per-request timing/token record. Subclasses may override to
-        also capture the record in a per-task (thread-local) log."""
-        self.request_log.append(record)
+        """Append one per-request timing/token record to the calling thread's log."""
+        _current_request_log().append(record)
 
 
 class MockLlmClient:

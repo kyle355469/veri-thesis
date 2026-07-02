@@ -32,7 +32,11 @@ for path in (str(PLANNER_ROOT), str(REPO_ROOT)):
 
 from agentic_ip_reuse.agent import AgentConfig, AgenticIpReuseAgent as PlanningAgent, dumps_result as dumps_plan_result
 from agentic_ip_reuse.hierarchical import HierarchicalAgent, HierarchicalConfig
-from agentic_ip_reuse.llm import VllmClient as PlanningVllmClient
+from agentic_ip_reuse.llm import (
+    VllmClient as PlanningVllmClient,
+    get_request_log as get_planning_request_log,
+    reset_request_log as reset_planning_request_log,
+)
 from agentic_ip_reuse.repository import JsonIpRepository
 from agentic_ip_reuse.semantic_repository import SemanticIpRepository
 from agentic_ip_reuse.tools import AgentToolExecutor
@@ -44,7 +48,12 @@ from ip_reuse_legacy.types import IpReusePlan
 from rag_rtl.embeddings import HashingEmbedder, make_embedder_with_fallback
 from rag_rtl import routing
 from rag_rtl.json_utils import dumps_json
-from rag_rtl.llm import VllmClient as LegacyVllmClient, extract_code
+from rag_rtl.llm import (
+    VllmClient as LegacyVllmClient,
+    extract_code,
+    get_request_log as get_legacy_request_log,
+    reset_request_log as reset_legacy_request_log,
+)
 from rag_rtl.repair_cache import RepairFixCache
 from rag_rtl.retrieval import LexicalReranker, Retriever
 from rag_rtl.retrieval_context import RetrievalContext
@@ -803,6 +812,13 @@ def run_one(
     routed_by = "none"
     flow_taken = "pipeline"
 
+    # Start this sample's serve-request logs fresh. Planner (agentic client) and
+    # legacy generator/repair (rag_rtl client) each write to their own module's
+    # thread-local log; this sample owns its worker thread, so reset here and
+    # merge both below to get one per-sample record of every LLM request.
+    reset_planning_request_log()
+    reset_legacy_request_log()
+
     if not catalog.usable:
         generation_error = f"missing dependency source(s): {', '.join(catalog.missing_dependencies)}"
     elif (args.resume or args.evaluate_only) and code_path.exists():
@@ -879,6 +895,11 @@ def run_one(
         function=0,
         error=generation_error or "generation produced empty code",
     )
+    # Merge planner + legacy serve requests for this sample, ordered by start time.
+    request_log = sorted(
+        get_planning_request_log() + get_legacy_request_log(),
+        key=lambda entry: entry.get("start_epoch") or 0.0,
+    )
     record = {
         "benchmark": "realbench",
         "pipeline": "agentic_ip_reuse_plan_to_ip_reuse_legacy_rtl",
@@ -933,6 +954,9 @@ def run_one(
         "stderr_tail": eval_result.stderr_tail,
         "evaluation_error": eval_result.error,
         "wall_s": wall_s,
+        # Per-serve-request start time + latency (+ tokens) for this sample.
+        "llm_request_log": request_log,
+        "llm_latency_s": round(sum(float(r.get("latency_s") or 0) for r in request_log), 4),
     }
     report.write_text(dumps_json(record, indent=2), encoding="utf-8")
     return record
@@ -2055,6 +2079,12 @@ def summarize(records: Sequence[Dict[str, Any]], tasks: Sequence[RealBenchTask],
         "function_rate": safe_rate(sum(1 for record in records if record.get("function") == 1), total),
         "pass_rate": safe_rate(sum(1 for record in records if record.get("passed")), total),
         "total_s": elapsed_s,
+        "total_llm_latency_s": round(sum(float(record.get("llm_latency_s") or 0.0) for record in records), 4),
+        "mean_llm_latency_s": (
+            round(sum(float(record.get("llm_latency_s") or 0.0) for record in records) / total, 4)
+            if total
+            else None
+        ),
         **rag_aggregates(records),
     }
 

@@ -3,15 +3,40 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from .json_utils import preview_text
 from .siliconmind_utils import parse_code as parse_siliconmind_code, wrap_code
+
+# Per-thread log of every LLM serve request (start time + latency + tokens).
+# Thread-local so concurrent samples don't mix, and module-level so it captures
+# every VllmClient instance created during a sample -- including short-lived ones
+# built deep in the call stack. Reset at each sample boundary, then snapshot.
+_REQUEST_LOG = threading.local()
+
+
+def _current_request_log() -> List[Dict[str, Any]]:
+    entries = getattr(_REQUEST_LOG, "entries", None)
+    if entries is None:
+        entries = []
+        _REQUEST_LOG.entries = entries
+    return entries
+
+
+def reset_request_log() -> None:
+    """Clear the calling thread's serve-request log (call when a sample starts)."""
+    _REQUEST_LOG.entries = []
+
+
+def get_request_log() -> List[Dict[str, Any]]:
+    """Snapshot of serve-request records made by this thread since the last reset."""
+    return list(_current_request_log())
 
 HDL_SOURCE_RE = re.compile(r"(?m)^\s*(module|interface|package|primitive|program)\b", re.IGNORECASE)
 KEYWORD_PROMPT_MARKER = "You are a Verilog specification keyword extraction assistant."
@@ -48,8 +73,14 @@ class VllmClient:
     model: str = "siliconmind-server"
     timeout_s: int = 2400
     api_key: str = "EMPTY"
-    # One record per serve request: wall-clock start time and latency in seconds.
-    request_log: List[Dict[str, Any]] = field(default_factory=list)
+
+    @staticmethod
+    def reset_request_log() -> None:
+        reset_request_log()
+
+    @staticmethod
+    def current_requests() -> List[Dict[str, Any]]:
+        return get_request_log()
 
     @classmethod
     def from_env(cls) -> "VllmClient":
@@ -252,9 +283,8 @@ class VllmClient:
         return body
 
     def _record_request(self, record: Dict[str, Any]) -> None:
-        """Store one per-request timing/token record. Subclasses may override to
-        also capture the record in a per-task (thread-local) log."""
-        self.request_log.append(record)
+        """Append one per-request timing/token record to the calling thread's log."""
+        _current_request_log().append(record)
 
 
 class StubLlmClient:

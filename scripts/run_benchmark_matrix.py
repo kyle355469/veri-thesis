@@ -158,8 +158,9 @@ class TrackingVllmClient(VllmClient):
             "api_usage_requests": 0,
             "estimated_usage_requests": 0,
         }
-        # Per-task (thread-local) log of every serve request: start time + latency.
-        self._local.requests = []
+        # Clear this thread's serve-request log so current_requests() (inherited
+        # from VllmClient) returns only the requests made for the current sample.
+        self.reset_request_log()
 
     def current_usage(self) -> Dict[str, int]:
         usage = getattr(self._local, "usage", None)
@@ -167,18 +168,6 @@ class TrackingVllmClient(VllmClient):
             self.reset_usage()
             usage = self._local.usage
         return dict(usage)
-
-    def current_requests(self) -> List[Dict[str, Any]]:
-        """Per-request timing/token records made since the last reset_usage()."""
-        return list(getattr(self._local, "requests", None) or [])
-
-    def _record_request(self, record: Dict[str, Any]) -> None:
-        super()._record_request(record)
-        requests = getattr(self._local, "requests", None)
-        if requests is None:
-            self.reset_usage()
-            requests = self._local.requests
-        requests.append(record)
 
     def chat(
         self,
