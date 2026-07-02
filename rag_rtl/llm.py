@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from .json_utils import preview_text
@@ -46,6 +48,8 @@ class VllmClient:
     model: str = "siliconmind-server"
     timeout_s: int = 2400
     api_key: str = "EMPTY"
+    # One record per serve request: wall-clock start time and latency in seconds.
+    request_log: List[Dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def from_env(cls) -> "VllmClient":
@@ -214,16 +218,37 @@ class VllmClient:
             },
             method="POST",
         )
+        start_epoch = time.time()
+        start_iso = datetime.now(timezone.utc).isoformat()
+        started = time.perf_counter()
+        ok = True
+        usage: Dict[str, Any] = {}
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_s) as response:
                 body = json.loads(response.read().decode("utf-8"))
+            usage = body.get("usage") or {}
         except urllib.error.HTTPError as exc:
+            ok = False
             body = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(
                 f"vLLM request failed: HTTP {exc.code} {exc.reason}: {_compact_error_body(body)}"
             ) from exc
         except urllib.error.URLError as exc:
+            ok = False
             raise RuntimeError(f"vLLM request failed: {exc}") from exc
+        finally:
+            self.request_log.append(
+                {
+                    "start_time": start_iso,
+                    "start_epoch": start_epoch,
+                    "latency_s": round(time.perf_counter() - started, 4),
+                    "ok": ok,
+                    # Straight from the server's usage block; None when omitted.
+                    "prompt_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),
+                    "completion_tokens": usage.get("completion_tokens") or usage.get("output_tokens"),
+                    "total_tokens": usage.get("total_tokens"),
+                }
+            )
         return body
 
 
