@@ -2,3 +2,167 @@
 
 \chapter{Discussion, Limitations, and Conclusion}
 \label{ch:07}
+
+\section{Discussion}
+\label{sec:discussion}
+
+\paragraph{What actually moved the needle.}
+Ranked by measured effect, the levers were: (1)~\emph{environment-faithful
+verification and repair} --- compiling against the real file set,
+injecting the testbench port contract, and condensing giant specs took the
+pipeline from low-single-digit to ${\sim}18$--25\,\% pass, the single
+largest step in the project's history; (2)~\emph{routing} --- matching
+task character to flow shape lifted solved tasks from 21 to 34 while
+\emph{cutting} compute by 39\,\% (Section~\ref{sec:results-routing});
+(3)~\emph{model scale} --- $6\times$ parameters bought $+9$\,pp syntax and
+$+4$\,pp pass@1 with the system held fixed; (4)~\emph{repair caching} ---
+$+5$--$7$\,pp syntax, density only. At the bottom: grounding
+($+0.6$\,pp, though it bought auditability and eliminated a failure
+class) and the functional repair loop ($+7$ net passes at $2.7\times$
+cost). The general lesson we draw is unglamorous: in agentic code
+generation for strict environments, \emph{fidelity between the inner loop
+and the scorer} is worth more than additional intelligence in any single
+stage.
+
+\paragraph{Grounding-by-construction over tool-calling.}
+Every model we tested --- from 20B to 120B --- emitted structured plans
+directly and never once called the retrieval tool provided for exactly
+that purpose (0 of 1{,}800 plans). Designs that \emph{depend} on the
+model choosing to invoke tools inherit that refusal as a silent failure
+mode: the plans looked plausible while citing modules that did not exist.
+The working alternative was to move the grounding out of the model's
+discretion --- inject the vocabulary, constrain the output to it, and
+enforce it post-hoc. We suspect this pattern --- \emph{make correctness a
+property of the harness, not a hoped-for behavior of the model} ---
+transfers well beyond RTL.
+
+\paragraph{Why routing works here.}
+The routing literature mostly buys quality with compute along one axis
+(small model vs.\ large model). Our setting is different in kind: the two
+flows have \emph{non-nested} competence sets, so the expensive flow does
+not dominate and a router can beat \emph{both} single-flow deployments at
+once --- more coverage than either, at far less compute than running both.
+We expect this shape to recur wherever an elaborate agentic scaffold
+coexists with a cheap direct path: the scaffold helps structured,
+integration-heavy instances and actively hurts self-contained ones, so
+the routing signal (does this task's difficulty live in its interfaces or
+in its logic?) is legible from the specification itself.
+
+\paragraph{The functional ceiling.}
+The binding constraint at the end of this work is unambiguous:
+${\sim}60$--69\,\% of everything that compiles fails its testbench, a
+share that neither model scale, nor caching, nor ten rounds of
+oracle-fed repair meaningfully dents. Verilator diagnostics give the
+repair loop a precise, local, actionable signal for syntax; a mismatch
+count gives almost nothing --- and Section~\ref{sec:results-artifacts}
+showed it can even be actively misleading. Progress on this tier will
+require a fundamentally better feedback channel (waveform-level
+localization, per-submodule benches, assertion synthesis), not more
+attempts on the current one.
+
+\section{Threats to Validity}
+\label{sec:threats}
+
+We collect here, in one place, every caveat that qualifies the numbers in
+this thesis; each was also flagged inline where it bites.
+
+\begin{enumerate}
+  \item \textbf{Single-seed runs.} Temperature-0 arms are one sample per
+    task; each sampled run is one seed. Cross-run deltas under
+    ${\sim}2$--3\,pp are compatible with sampling noise. The claims we
+    rest weight on (headline $2.5\times$; routing $+13$ tasks at $-39\,\%$
+    compute; the flat pass@20) are far outside that band.
+  \item \textbf{Cross-run configuration drift.} Only three comparisons
+    are single-variable: the cache trio, the temp-0 head-to-head, and
+    \textsc{Router-t1}$\to$\textsc{Router-2t}. Everything else ---
+    notably the router-vs-\textsc{Hybrid} comparison (repair budgets
+    \emph{and} direct-flow repair differ) and the \textsc{Func-2/4}
+    $\to$\textsc{Func-10/10} pair (a scoring waiver changed) --- is
+    labeled directional where it appears.
+  \item \textbf{Cost accounting.} Token totals from resumed runs
+    undercount (resumed samples log zero tokens): the only clean
+    full-run token cost is \textsc{Cache-off}'s 46.3\,M. Direct-flow
+    repair calls are not instrumented, so direct-flow token totals ---
+    including \textsc{Router-2t}'s 28.3\,M --- are lower bounds; the
+    per-solved-task efficiency ratios in Table~\ref{tab:routing} would
+    shrink somewhat, not reverse, under full instrumentation.
+    Wall-clock is never compared across days (shared server, varying
+    load).
+  \item \textbf{pass@k independence.} The run-scoped cache couples a
+    task's samples; all load-bearing pass@k values come from cache-off
+    or task-scoped arms.
+  \item \textbf{Scoring strictness.} The harness fails on warnings, so
+    our syntax rates are conservative relative to error-only benchmarks
+    --- and Section~\ref{sec:results-artifacts} showed our own internal
+    gate was at times \emph{stricter than the scorer}, deflating four
+    tasks.
+  \item \textbf{Benchmark fix boundary.} The AES S-box testbenches were
+    repaired upstream on June~25,~2026, after our report. Every run in
+    this thesis predates the fix except where stated; no comparison
+    spans the boundary on \texttt{aes\_sbox}/\texttt{aes\_inv\_sbox}.
+  \item \textbf{Oracle feedback.} The functional repair loop consumes
+    the scoring testbench's mismatch report. Its passes mean
+    ``specification plus oracle feedback'' and are quarantined in
+    Section~\ref{sec:results-funcrepair}; no headline number includes
+    them. Relatedly, the internal lint compiles the testbench, so
+    Verilator diagnostics can quote testbench lines into repair prompts;
+    a flag exists to disable this for leak-free claims, at a syntax-rate
+    cost we did not pay here.
+  \item \textbf{Benchmark scope.} All results are on one benchmark's 60
+    module-level tasks and three IP projects, with open-weight models of
+    one family for all controlled comparisons. The family-level
+    heterogeneity we observe (AES vs.\ E203) is itself evidence that
+    results will vary across codebases.
+\end{enumerate}
+
+\section{Future Work}
+\label{sec:future}
+
+Four directions follow directly from the measured constraints.
+\emph{First}, functional feedback without oracle leakage: synthesize
+self-checking benches or assertions from the specification, so the
+functional repair loop gets a mismatch signal the scorer never sees ---
+and gate it off pure-combinational modules, where
+Section~\ref{sec:results-artifacts} showed the signal can be corrupted.
+\emph{Second}, interface-contract enforcement as a hard gate: the
+testbench DUT instantiation is already injected as text; promoting it to
+a mechanical post-generation port-diff check would delete the
+\texttt{PINNOTFOUND} class that dominates giant-module syntax failures,
+and the internal repair gate should mirror the scorer's warning waivers
+exactly. \emph{Third}, selective decomposition for the giants: RealBench's
+system-level tasks decompose into submodules that are themselves benched
+module tasks, so a tree-structured generator could verify each node
+against a \emph{real} testbench and compose upward --- decomposition with
+per-node oracles, reserved for the scale-limited tier where it pays.
+\emph{Fourth}, hardening the router: the dominant misroute (A$\to$direct)
+argues for widening the uncertainty band that triggers the plan probe,
+and multi-seed replication would move the routing result from strongly
+suggestive to statistically settled.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+This thesis asked how far careful \emph{system} engineering --- planning,
+grounding, verification, repair, and routing around fixed open-weight
+models --- can push LLM-based RTL generation on a realistic,
+reuse-dominated benchmark. The answer is: substantially, and measurably.
+A two-stage pipeline that plans IP reuse against a grounded per-task
+catalog and generates under environment-faithful verification reaches
+$2.3\times$ the syntax rate and $2.5\times$ the pass rate of the same
+model prompted directly, with the entire gain concentrated where reuse
+exists to be exploited. A two-tier cascade router that matches task
+character to generation flow solves 34 of 60 tasks --- more than running
+both flows on everything --- at less than a third of the brute-force
+compute and $4\times$ better token efficiency per solved task.
+
+The thesis's second kind of contribution is diagnostic honesty about the
+same system: grounding fixed the plans without moving the score; caching
+raised density without changing solvability; functional repair at depth
+ten wasted 98\,\% of its compute; and a golden-model audit of persistent
+zeros exonerated the models on two tasks, convicted our own repair gate
+on four, and confirmed the benchmark honest on the rest --- findings that
+redirected the engineering each time, and one of which was adopted
+upstream by the benchmark itself. The frontier, at the end, is not
+syntax, not plans, and not scale: it is functional correctness, and the
+next system to move it will be the one that finds its models a better
+feedback signal than a mismatch count.

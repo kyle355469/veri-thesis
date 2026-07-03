@@ -2,3 +2,194 @@
 
 \chapter{Background and Related Work}
 \label{ch:02}
+
+This chapter fixes the hardware-design background the thesis assumes
+(Section~\ref{sec:bg-rtl}), then surveys the four research threads it
+builds on: LLMs for Verilog generation
+(Section~\ref{sec:rw-llm-verilog}), verification-in-the-loop repair
+(Section~\ref{sec:rw-repair}), retrieval-augmented code generation
+(Section~\ref{sec:rw-rag}), and LLM routing and cascades
+(Section~\ref{sec:rw-routing}). Section~\ref{sec:rw-positioning} positions
+this thesis against them.
+
+\section{RTL Design, Verification, and IP Reuse}
+\label{sec:bg-rtl}
+
+Register-transfer-level (RTL) design expresses digital hardware as
+synchronous transfers between registers through combinational logic,
+written in a hardware description language --- here Verilog/SystemVerilog
+\citep{ieee1800}. Unlike software, RTL code carries a hard structural
+interface: a module's port list is a physical contract with its
+environment, and simulation semantics (blocking vs.\ nonblocking
+assignment, delta-cycle scheduling) can make two logically equivalent
+descriptions observably different to a testbench --- a subtlety that
+returns with force in Section~\ref{sec:results-artifacts}. Correctness is
+established by tools, not review: this thesis uses
+Verilator~\citep{verilator} for lint and compiled simulation and
+Yosys~\citep{wolf2013yosys} for synthesis-based structural analysis.
+
+Industrial hardware productivity rests on \emph{IP reuse}: assembling
+verified, pre-existing blocks rather than rewriting them, a practice
+codified two decades ago~\citep{keating2002reuse}. A working chip team
+spends much of its effort not on new datapaths but on \emph{integration}
+--- instantiating existing modules and wiring their interfaces correctly.
+This observation is the design premise of Chapter~\ref{ch:03}: if
+real-world RTL work is reuse-dominated, an RTL-generating agent should
+plan reuse explicitly rather than synthesize every line from scratch. The
+open-source projects our benchmark draws from --- an AES cipher core and
+an SD-card controller from OpenCores~\citep{opencores} and the
+HummingBirdv2 E203 RISC-V processor~\citep{e203hbirdv2} --- are themselves
+products of this reuse culture.
+
+\section{Large Language Models for Verilog Generation}
+\label{sec:rw-llm-verilog}
+
+\paragraph{Benchmarks.}
+Evaluation infrastructure for LLM-generated Verilog began with
+fine-tuning-era studies~\citep{pearce2020dave, thakur2023verigen} and
+crystallized into standard suites: VerilogEval~\citep{liu2023verilogeval},
+machine-checked HDLBits-derived problems with the pass@k protocol
+inherited from HumanEval~\citep{chen2021humaneval}, later revised with
+specification-to-RTL tasks~\citep{pinckney2025verilogeval2}; and
+RTLLM~\citep{lu2024rtllm}, larger open-ended designs judged on syntax,
+functionality, and quality. These suites consist predominantly of
+\emph{self-contained} single modules. RTL-Repo~\citep{allam2024rtlrepo}
+moved evaluation toward multi-file repository context, and
+RealBench~\citep{realbench2025} --- used throughout this thesis
+(Section~\ref{sec:setup-realbench}) --- builds tasks from complete, real IP
+projects in which a target module must integrate against provided
+dependencies and survive a strict warnings-as-fatal harness. The
+distinction is not cosmetic: Chapter~\ref{ch:06} shows that the phenomena
+that dominate RealBench (interface contracts, reuse, integration) are
+precisely the ones self-contained benchmarks cannot exhibit.
+
+\paragraph{Models and systems.}
+One line of work improves the generator itself: VeriGen fine-tunes on
+harvested Verilog corpora~\citep{thakur2023verigen}; ChipNeMo domain-adapts
+LLMs across chip-design tasks~\citep{liu2023chipnemo};
+RTLCoder~\citep{liu2024rtlcoder}, CodeV~\citep{zhao2024codev}, and
+CraftRTL~\citep{liu2025craftrtl} push open models past commercial
+baselines with synthetic-data pipelines, the last adding
+correct-by-construction non-textual representations and targeted repair
+data. Conversational studies such as Chip-Chat~\citep{blocklove2023chipchat}
+probed interactive design with a human in the loop. This thesis is
+orthogonal to all of them: we hold the base models fixed (off-the-shelf
+open weights, Section~\ref{sec:setup-models}) and engineer the
+\emph{system around} the model --- planning, grounding, verification,
+repair, and routing. Better base models slot in unchanged; indeed
+Section~\ref{sec:results-failure} measures exactly what a $6\times$ model
+scale-up does and does not buy under a fixed system.
+
+\section{Verification-in-the-Loop Generation and Repair}
+\label{sec:rw-repair}
+
+Feeding tool feedback back into generation is the field's standard answer
+to the unreliability of one-shot code. In software,
+self-repair with execution feedback is well studied and its limits
+documented~\citep{olausson2024selfrepair}; agentic framings add explicit
+reasoning-action loops~\citep{yao2023react}, verbal
+self-reflection~\citep{shinn2023reflexion}, and purpose-built
+agent-computer interfaces~\citep{yang2024sweagent}. In hardware,
+AutoChip iterates generation against compiler and simulation
+errors~\citep{thakur2024autochip}; RTLFixer targets syntax repair with
+retrieval over an error-pattern database~\citep{tsai2024rtlfixer}; MEIC
+frames RTL debug as an iterated LLM workflow~\citep{xu2024meic}; and
+VerilogCoder couples an autonomous agent with graph-based planning and an
+AST/waveform-tracing tool, reporting strong VerilogEval-Human
+results~\citep{ho2025verilogcoder}.
+
+The repair machinery of Section~\ref{sec:pipeline-repair} belongs to this
+family but contributes three things the prior systems do not measure.
+First, a \emph{semantic repair cache} that replays the model's own
+verified diagnostic$\to$diff fixes across samples --- related in spirit to
+RTLFixer's error-pattern retrieval, but populated online from verified
+successes rather than curated offline, and evaluated for what it changes
+(sample density) and what it cannot (task solvability,
+Section~\ref{sec:results-cache}). Second, an explicit
+\emph{oracle-feedback accounting}: our functional repair loop consumes the
+scoring testbench's mismatch signal, so it is quarantined as a separate
+arm --- a methodological line most repair papers leave undrawn. Third, a
+\emph{budget calibration} showing both repair phases are fix-fast-or-never
+(Section~\ref{sec:results-budget}), turning repair-loop depth from
+folklore into a measured engineering parameter.
+
+\section{Retrieval-Augmented Code Generation}
+\label{sec:rw-rag}
+
+Retrieval-augmented generation grounds model output in external
+sources~\citep{lewis2020rag}; for code, retrieval over repositories
+supplies cross-file context that no prompt window holds natively, whether
+by similar-code lookup~\citep{lu2022reacc} or iterative repository-level
+retrieval interleaved with generation~\citep{zhang2023repocoder}. Our
+per-task IP catalog (Section~\ref{sec:pipeline-overview}) is a
+deliberately narrow instance: retrieval is scoped to the task's own
+dependency closure --- never across tasks, eliminating benchmark
+contamination by construction --- and its product is not free-form context
+but a \emph{closed vocabulary} of instantiable modules that the planner's
+output is grounded against. The empirical twist
+(Section~\ref{sec:results-grounding}) is that the retrieval \emph{tool}
+went unused by every model tested; what mattered was injecting the
+catalog and enforcing the vocabulary post-hoc --- retrieval as
+constraint, not as context.
+
+\section{LLM Routing and Cascades}
+\label{sec:rw-routing}
+
+A parallel literature allocates queries across models of different cost:
+FrugalGPT sequences models with a learned stopping
+rule~\citep{chen2023frugalgpt}; Hybrid LLM trains a router to send easy
+queries to a small model~\citep{ding2024hybridllm}; RouteLLM learns
+routers from human preference data~\citep{ong2024routellm}; AutoMix
+self-verifies before escalating~\citep{aggarwal2024automix}. All of these
+route between \emph{models} on general text tasks, assuming the larger
+model weakly dominates in quality. Our router (Chapter~\ref{ch:04})
+differs in both axes. It routes between \emph{workflows} over the same
+model --- a cheap direct flow and an expensive agentic pipeline --- and
+the expensive flow does \emph{not} dominate: on self-contained algorithmic
+modules the pipeline is actively harmful
+(Section~\ref{sec:router-motivation}), so routing is about matching task
+\emph{character} to flow \emph{shape}, not buying quality with compute.
+Its cascade structure is also domain-specific: the mid-tier probe
+inspects a structured artifact the pipeline produces anyway (the plan),
+so the escalation step costs one planner call rather than a full
+duplicate generation.
+
+\section{Positioning}
+\label{sec:rw-positioning}
+
+\begin{table}[htbp]
+  \centering
+  \caption[Positioning against related systems]{This thesis against the
+    closest related systems. ``Reuse planning'' = explicit grounded
+    IP-reuse decisions; ``workflow routing'' = per-task choice among
+    generation flows.}
+  \label{tab:positioning}
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{lccccc}
+    \toprule
+    System & Repair loop & Retrieval & Reuse planning & Workflow routing & Repo-realistic eval \\
+    \midrule
+    VeriGen~\citep{thakur2023verigen}       & --         & --     & --     & --     & -- \\
+    AutoChip~\citep{thakur2024autochip}     & \checkmark & --     & --     & --     & -- \\
+    RTLFixer~\citep{tsai2024rtlfixer}       & \checkmark & \checkmark & -- & --     & -- \\
+    VerilogCoder~\citep{ho2025verilogcoder} & \checkmark & \checkmark & -- & --     & -- \\
+    RepoCoder~\citep{zhang2023repocoder}    & --         & \checkmark & -- & --     & \checkmark \\
+    RouteLLM~\citep{ong2024routellm}        & --         & --     & --     & model-level & -- \\
+    \textbf{This thesis}                    & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+To our knowledge, this thesis is the first system to combine
+catalog-grounded IP-reuse \emph{planning} with per-task \emph{workflow
+routing} for RTL generation, and the first to evaluate the combination on
+a repository-realistic benchmark under controlled ablations
+(Table~\ref{tab:positioning}). Equally deliberately, it contributes
+negative and diagnostic results the surveyed literature rarely reports:
+a grounding fix that works perfectly yet moves end-to-end quality by
+less than a point, a repair cache that changes density but not
+solvability, a functional-repair budget that is 98\,\% wasted at depth
+ten, and a benchmark-artifact audit that exonerated the models on two
+tasks and convicted our own tooling on four more
+(Section~\ref{sec:results-artifacts}).

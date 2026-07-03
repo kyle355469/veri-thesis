@@ -1,224 +1,324 @@
-@book{IEEE-1363,
-  author =       {{IEEE Std 1363-2000}},
-  title =        {{IEEE} Standard Specifications for Public-Key Cryptography},
-  address =      {New York},
-  publisher =    {IEEE},
-  year =         2000
+% Bibliography for the thesis. Every entry verified against arXiv / DBLP /
+% ACL Anthology / publisher pages (July 2026); arXiv ids kept in notes.
+
+% ---------- Benchmarks ----------
+
+@inproceedings{liu2023verilogeval,
+  author    = {Liu, Mingjie and Pinckney, Nathaniel and Khailany, Brucek and Ren, Haoxing},
+  title     = {{VerilogEval}: Evaluating Large Language Models for {Verilog} Code Generation},
+  booktitle = {2023 IEEE/ACM International Conference on Computer Aided Design (ICCAD)},
+  year      = {2023},
+  note      = {arXiv:2309.07544}
 }
 
-@inproceedings{kocher99,
-  author =       {C. Kocher and J. Jaffe and B. Jun},
-  title =        {Differential Power Analysis},
-  editor =       {M. Wiener},
-  booktitle =    {Advances in Cryptology ({CRYPTO}~'99)},
-  series =       {Lecture Notes in Computer Science},
-  volume =       1666,
-  pages =        {388-397},
-  publisher =    {Springer-Verlag},
-  month =        {August},
-  year =         1999
+@article{pinckney2025verilogeval2,
+  author  = {Pinckney, Nathaniel and Batten, Christopher and Liu, Mingjie and Ren, Haoxing and Khailany, Brucek},
+  title   = {Revisiting {VerilogEval}: A Year of Improvements in Large-Language Models for Hardware Code Generation},
+  journal = {ACM Transactions on Design Automation of Electronic Systems},
+  volume  = {30},
+  number  = {6},
+  pages   = {91:1--91:20},
+  year    = {2025},
+  note    = {arXiv:2408.11053}
 }
 
-@incollection{Krasnogor2004e,
-  author =       {N. Krasnogor},
-  title =        {Towards robust memetic algorithms},
-  booktitle =    {Recent Advances in Memetic Algorithms},
-  publisher =    {Springer Berlin Heidelberg},
-  year =         2004,
-  pages =        {185-207},
-  editor =       {W.E. Hart and N. Krasnogor and J.E. Smith},
-  volume =       166,
-  series =       {Studies in Fuzziness and Soft Computing},
-  address =      {New York},
+@inproceedings{lu2024rtllm,
+  author    = {Lu, Yao and Liu, Shang and Zhang, Qijun and Xie, Zhiyao},
+  title     = {{RTLLM}: An Open-Source Benchmark for Design {RTL} Generation with Large Language Model},
+  booktitle = {Proceedings of the 29th Asia and South Pacific Design Automation Conference (ASP-DAC)},
+  year      = {2024}
 }
 
-@incollection{zjsw,
-  author =       {班固},
-  title =        {苏武传},
-  booktitle =    {传记散文英华},
-  publisher =    {湖北人民出版社},
-  year =         1998,
-  pages =        {65-69},
-  editor =       {郑在瀛 and 汪超宏 and 周文复},
-  volume =       2,
-  series =       {新古文观止丛书},
-  address =      {武汉},
-  language =     "chinese",
+@inproceedings{allam2024rtlrepo,
+  author    = {Allam, Ahmed and Shalan, Mohamed},
+  title     = {{RTL-Repo}: A Benchmark for Evaluating {LLMs} on Large-Scale {RTL} Design Projects},
+  booktitle = {2024 IEEE LLM Aided Design Workshop (LAD)},
+  year      = {2024},
+  note      = {arXiv:2405.17378}
 }
 
-@inbook{clzs,
-  author =       {阎真},
-  title =        {沧浪之水},
-  chapter =      {大人物还是讲人情的},
-  pages =        {185-207},
-  publisher =    {人民文学出版社},
-  year =         2001,
-  language =     "chinese",
+@misc{realbench2025,
+  author        = {Jin, Pengwei and Huang, Di and Li, Chongxiao and Cheng, Shuyao and Zhao, Yang and Zheng, Xinyao and Zhu, Jiaguo and Xing, Shuyi and Dou, Bohan and Zhang, Rui and Du, Zidong and Guo, Qi and Hu, Xing},
+  title         = {{RealBench}: Benchmarking {Verilog} Generation Models with Real-World {IP} Designs},
+  year          = {2025},
+  eprint        = {2507.16200},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  url           = {https://arxiv.org/abs/2507.16200}
 }
 
-@book{tex,
-  author =       "Donald E. Knuth",
-  title =        "The {\TeX} Book",
-  publisher =    "Addison-Wesley Publishing Company",
-  address =      "Reading, MA",
-  year =         1989,
-  edition =      "15th",
+% ---------- Verilog generators / models ----------
+
+@article{thakur2023verigen,
+  author  = {Thakur, Shailja and Ahmad, Baleegh and Pearce, Hammond and Tan, Benjamin and Dolan-Gavitt, Brendan and Karri, Ramesh and Garg, Siddharth},
+  title   = {{VeriGen}: A Large Language Model for {Verilog} Code Generation},
+  journal = {ACM Transactions on Design Automation of Electronic Systems},
+  volume  = {29},
+  number  = {3},
+  pages   = {46:1--46:31},
+  year    = {2024}
 }
 
-@book{companion,
-  author =       "Michel Goosens and Frank Mittelbach and Alexander Samarin",
-  title =        "The {\LaTeX} Companion",
-  publisher =    "Addison-Wesley Publishing Company",
-  address =      "Reading, MA",
-  PAGES =        "112--125",
-  year =         1994,
+@inproceedings{pearce2020dave,
+  author    = {Pearce, Hammond and Tan, Benjamin and Karri, Ramesh},
+  title     = {{DAVE}: Deriving Automatically {Verilog} from {English}},
+  booktitle = {Proceedings of the 2020 ACM/IEEE Workshop on Machine Learning for CAD (MLCAD)},
+  pages     = {27--32},
+  year      = {2020}
 }
 
-@article{ELIDRISSI94,
-  author =       "{Chafik El Idrissi}, M. and {Roney}, A. and {Frigon}, C. and
-                  {Larzilli{\`e}re}, M.",
-  title =        "Measurements of total kinetic-energy released to the {$N=2$}
-                  dissociation limit of {H}$_2$ --- evidence of the dissociation
-                  of very high vibrational {R}ydberg states of {H}$_2$ by
-                  doubly-excited states",
-  journal =      "Chemical Physics Letters",
-  pages =        "260-266",
-  volume =       224,
-  number =       10,
-  year =         1994,
+@misc{liu2023chipnemo,
+  author        = {Liu, Mingjie and Ene, Teodor-Dumitru and Kirby, Robert and Cheng, Chris and Pinckney, Nathaniel and Liang, Rongjian and Alben, Jonah and Anand, Himyanshu and Banerjee, Sanmitra and Bayraktaroglu, Ismet and others},
+  title         = {{ChipNeMo}: Domain-Adapted {LLMs} for Chip Design},
+  year          = {2023},
+  eprint        = {2311.00176},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2311.00176}
 }
 
-@article{MELLINGER96,
-  author =       "Mellinger, A. and Vidal, C. R. and Jungen, Ch.",
-  title =        "Laser reduced fluorescence study of the carbon-monoxide nd
-                  triplet {R}ydberg series-experimental results and multichannel
-                  quantum-defect analysis",
-  journal =      "J. Chem. Phys.",
-  pages =        "8913-8921",
-  volume =       104,
-  number =       5,
-  year =         1996,
+@inproceedings{liu2024rtlcoder,
+  author    = {Liu, Shang and Fang, Wenji and Lu, Yao and Zhang, Qijun and Zhang, Hongce and Xie, Zhiyao},
+  title     = {{RTLCoder}: Outperforming {GPT-3.5} in Design {RTL} Generation with Our Open-Source Dataset and Lightweight Solution},
+  booktitle = {2024 IEEE LLM Aided Design Workshop (LAD)},
+  year      = {2024},
+  note      = {arXiv:2312.08617}
 }
 
-@article{SHELL02,
-  author =       "Michael Shell",
-  title =        "How to Use the {IEEEtran \LaTeX} Class",
-  journal =      "Journal of {\LaTeX} Class Files",
-  year =         2002,
-  volume =       12,
-  number =       4,
-  pages =        "100--120"
+@misc{zhao2024codev,
+  author        = {Zhao, Yang and Huang, Di and Li, Chongxiao and Jin, Pengwei and Song, Muxin and Xu, Yinan and Nan, Ziyuan and Gao, Mingju and Ma, Tianyun and Qi, Lei and Pan, Yansong and Zhang, Zhenxing and Zhang, Rui and Zhang, Xishan and Du, Zidong and Guo, Qi and Hu, Xing},
+  title         = {{CodeV}: Empowering {LLMs} for {Verilog} Generation through Multi-Level Summarization},
+  year          = {2024},
+  eprint        = {2407.10424},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2407.10424}
 }
 
-@TechReport{NPB2,
-  title =        {The {NAS} Parallel Benchmarks 2.0},
-  author =       {Alex Woo and David Bailey and Maurice Yarrow and Wijngaart
-                  Wijngaart and Tim Harris and William Saphir},
-  year =         1995,
-  month =        dec # "~05",
-  institution =  "The Pennsylvania State University CiteSeer Archives",
-  url =          "http://www.nasa.org/"
+@inproceedings{liu2025craftrtl,
+  author    = {Liu, Mingjie and Tsai, Yun-Da and Zhou, Wenfei and Ren, Haoxing},
+  title     = {{CraftRTL}: High-quality Synthetic Data Generation for {Verilog} Code Models with Correct-by-Construction Non-Textual Representations and Targeted Code Repair},
+  booktitle = {The Thirteenth International Conference on Learning Representations (ICLR)},
+  year      = {2025},
+  note      = {arXiv:2409.12993}
 }
 
-@inproceedings{DPMG,
-  author =       {Kim, Sangbum and Woo, Namyoon and Yeom, Heon Y. and Park,
-                  Taesoon and Park, Hyoungwoo},
-  title =        {Design and {I}mplementation of {D}ynamic {P}rocess
-                  {M}anagement for {G}rid-enabled {MPICH}},
-  booktitle =    {the 10th European PVM/MPI Users' Group Conference},
-  year =         2003,
-  address =      {Venice, Italy},
-  month =        sep,
+@inproceedings{blocklove2023chipchat,
+  author    = {Blocklove, Jason and Garg, Siddharth and Karri, Ramesh and Pearce, Hammond},
+  title     = {Chip-Chat: Challenges and Opportunities in Conversational Hardware Design},
+  booktitle = {2023 ACM/IEEE 5th Workshop on Machine Learning for CAD (MLCAD)},
+  year      = {2023},
+  note      = {arXiv:2305.13243}
 }
 
-@inproceedings{cnproceed,
-  author =       {王重阳 and 黄药师 and 欧阳峰 and 洪七公 and 段皇帝},
-  title =        {武林高手从入门到精通},
-  booktitle =    {第~$N$~次华山论剑},
-  year =         2006,
-  address =      {西安, 中国},
-  month =        sep,
-  language =     "chinese",
+% ---------- Repair / agentic loops ----------
+
+@misc{thakur2024autochip,
+  author        = {Thakur, Shailja and Blocklove, Jason and Pearce, Hammond and Tan, Benjamin and Garg, Siddharth and Karri, Ramesh},
+  title         = {{AutoChip}: Automating {HDL} Generation Using {LLM} Feedback},
+  year          = {2023},
+  eprint        = {2311.04887},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2311.04887}
 }
 
-@article{cnarticle,
-  author =       "贾宝玉 and 林黛玉 and 薛宝钗 and 贾探春",
-  title =        "论刘姥姥食量大如牛之现实意义",
-  journal =      "红楼梦杂谈",
-  pages =        "260--266",
-  volume =       224,
-  year =         1800,
-  language =     "chinese",
+@inproceedings{tsai2024rtlfixer,
+  author    = {Tsai, Yun-Da and Liu, Mingjie and Ren, Haoxing},
+  title     = {{RTLFixer}: Automatically Fixing {RTL} Syntax Errors with Large Language Model},
+  booktitle = {Proceedings of the 61st ACM/IEEE Design Automation Conference (DAC)},
+  year      = {2024}
 }
 
-@mastersthesis{zhubajie,
-  author =       {猪八戒},
-  title =        {论流体食物的持久保存},
-  school =       {广寒宫大学},
-  year =         2005,
-  address =      {北京},
-  language =     "chinese",
+@inproceedings{xu2024meic,
+  author    = {Xu, Ke and Sun, Jialin and Hu, Yuchen and Fang, Xinwei and Shan, Weiwei and Wang, Xi and Jiang, Zhe},
+  title     = {{MEIC}: Re-thinking {RTL} Debug Automation using {LLMs}},
+  booktitle = {Proceedings of the 43rd IEEE/ACM International Conference on Computer-Aided Design (ICCAD)},
+  year      = {2024},
+  note      = {arXiv:2405.06840}
 }
 
-@phdthesis{shaheshang,
-  author =       {沙和尚},
-  title =        {论流沙河的综合治理},
-  school =       {清华大学},
-  year =         2005,
-  address =      {北京},
-  language =     "chinese",
+@inproceedings{ho2025verilogcoder,
+  author    = {Ho, Chia-Tung and Ren, Haoxing and Khailany, Brucek},
+  title     = {{VerilogCoder}: Autonomous {Verilog} Coding Agents with Graph-based Planning and Abstract Syntax Tree ({AST})-based Waveform Tracing Tool},
+  booktitle = {Proceedings of the AAAI Conference on Artificial Intelligence},
+  volume    = {39},
+  pages     = {300--307},
+  year      = {2025},
+  note      = {arXiv:2408.08927}
 }
 
-@mastersthesis{metamori2004,
-  author =       {Ashwin Raju Jeyakumar},
-  title =        {Metamori: A library for Incremental File Checkpointing},
-  school =       {Virgina Tech},
-  year =         2004,
-  month =        jun # "~21",
-  address =      {Blacksburg},
+@inproceedings{olausson2024selfrepair,
+  author    = {Olausson, Theo X. and Inala, Jeevana Priya and Wang, Chenglong and Gao, Jianfeng and Solar-Lezama, Armando},
+  title     = {Is Self-Repair a Silver Bullet for Code Generation?},
+  booktitle = {The Twelfth International Conference on Learning Representations (ICLR)},
+  year      = {2024},
+  note      = {arXiv:2306.09896}
 }
 
-@phdthesis{FistSystem01,
-  author =       "Erez Zadok",
-  title =        "{FiST: A System for Stackable File System Code Generation}",
-  year =         2001,
-  month =        "May",
-  school =       "Computer Science Department, Columbia University",
-  address =      "USA"
+@inproceedings{shinn2023reflexion,
+  author    = {Shinn, Noah and Cassano, Federico and Gopinath, Ashwin and Narasimhan, Karthik and Yao, Shunyu},
+  title     = {Reflexion: Language Agents with Verbal Reinforcement Learning},
+  booktitle = {Advances in Neural Information Processing Systems 36 (NeurIPS)},
+  year      = {2023},
+  note      = {arXiv:2303.11366}
 }
 
-@inbook{ColdSources,
-  author =       {P. Gr{\"o}ning and L. Nilsson and P. Ruffieux and R.
-                  Clergereaux and O. Gr{\"o}ning},
-  title =        {Encyclopedia of Nanoscience and Nanotechnology},
-  pages =        {547--579},
-  publisher =    {American Scientific Publishers},
-  year =         2004,
-  volume =       1,
+@inproceedings{yao2023react,
+  author    = {Yao, Shunyu and Zhao, Jeffrey and Yu, Dian and Du, Nan and Shafran, Izhak and Narasimhan, Karthik and Cao, Yuan},
+  title     = {{ReAct}: Synergizing Reasoning and Acting in Language Models},
+  booktitle = {The Eleventh International Conference on Learning Representations (ICLR)},
+  year      = {2023},
+  note      = {arXiv:2210.03629}
 }
 
-@online{chuban2001,
-  author =      {萧钰},
-  title =       {出版业信息化迈入快车道},
-  modifydate =  {2001-12-19},
-  citedate =    {2002-04-15},
-  url =         {http://www.creader.com/news/200112190019.htm},
-  language =    "chinese",
+@inproceedings{yang2024sweagent,
+  author    = {Yang, John and Jimenez, Carlos E. and Wettig, Alexander and Lieret, Kilian and Yao, Shunyu and Narasimhan, Karthik and Press, Ofir},
+  title     = {{SWE-agent}: Agent-Computer Interfaces Enable Automated Software Engineering},
+  booktitle = {Advances in Neural Information Processing Systems 37 (NeurIPS)},
+  year      = {2024}
 }
 
-@online{oclc2000,
-  author =      {{Online Computer Library Center, Inc.}},
-  title =       {History of {OCLC}},
-  citedate =    {2000-01-08},
-  url =         {http://www.oclc.org/about/history/default.htm},
+% ---------- Retrieval-augmented generation ----------
+
+@inproceedings{lewis2020rag,
+  author    = {Patrick Lewis and Ethan Perez and Aleksandra Piktus and Fabio Petroni and Vladimir Karpukhin and Naman Goyal and Heinrich K{\"u}ttler and Mike Lewis and Wen-tau Yih and Tim Rockt{\"a}schel and Sebastian Riedel and Douwe Kiela},
+  title     = {Retrieval-Augmented Generation for Knowledge-Intensive {NLP} Tasks},
+  booktitle = {Advances in Neural Information Processing Systems 33 (NeurIPS)},
+  year      = {2020},
+  note      = {arXiv:2005.11401}
 }
 
+@inproceedings{zhang2023repocoder,
+  author    = {Fengji Zhang and Bei Chen and Yue Zhang and Jacky Keung and Jin Liu and Daoguang Zan and Yi Mao and Jian-Guang Lou and Weizhu Chen},
+  title     = {{RepoCoder}: Repository-Level Code Completion Through Iterative Retrieval and Generation},
+  booktitle = {Proceedings of the 2023 Conference on Empirical Methods in Natural Language Processing (EMNLP)},
+  pages     = {2471--2484},
+  publisher = {Association for Computational Linguistics},
+  year      = {2023}
+}
 
-@online{thuthesis,
-  author =      {薛瑞尼},
-  title =       {\thuthesis: 清华大学学位论文模板},
-  citedate =    {2017-12-02},
-  url =         {https://github.com/xueruini/thuthesis},
-  language =    "chinese",
-  year =        2017,
+@inproceedings{lu2022reacc,
+  author    = {Shuai Lu and Nan Duan and Hojae Han and Daya Guo and Seung-won Hwang and Alexey Svyatkovskiy},
+  title     = {{ReACC}: {A} Retrieval-Augmented Code Completion Framework},
+  booktitle = {Proceedings of the 60th Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers)},
+  pages     = {6227--6240},
+  publisher = {Association for Computational Linguistics},
+  year      = {2022}
+}
+
+% ---------- Routing / cascades ----------
+
+@article{chen2023frugalgpt,
+  author  = {Lingjiao Chen and Matei Zaharia and James Zou},
+  title   = {{FrugalGPT}: How to Use Large Language Models While Reducing Cost and Improving Performance},
+  journal = {Transactions on Machine Learning Research},
+  year    = {2024},
+  note    = {First appeared as arXiv:2305.05176 (2023)}
+}
+
+@inproceedings{ong2024routellm,
+  author    = {Isaac Ong and Amjad Almahairi and Vincent Wu and Wei-Lin Chiang and Tianhao Wu and Joseph E. Gonzalez and M. Waleed Kadous and Ion Stoica},
+  title     = {{RouteLLM}: Learning to Route {LLMs} with Preference Data},
+  booktitle = {The Thirteenth International Conference on Learning Representations (ICLR)},
+  year      = {2025},
+  note      = {arXiv:2406.18665}
+}
+
+@inproceedings{ding2024hybridllm,
+  author    = {Dujian Ding and Ankur Mallick and Chi Wang and Robert Sim and Subhabrata Mukherjee and Victor R{\"u}hle and Laks V. S. Lakshmanan and Ahmed Hassan Awadallah},
+  title     = {Hybrid {LLM}: Cost-Efficient and Quality-Aware Query Routing},
+  booktitle = {The Twelfth International Conference on Learning Representations (ICLR)},
+  year      = {2024},
+  note      = {arXiv:2404.14618}
+}
+
+@inproceedings{aggarwal2024automix,
+  author    = {Pranjal Aggarwal and Aman Madaan and Ankit Anand and Srividya Pranavi Potharaju and Swaroop Mishra and Pei Zhou and Aditya Gupta and Dheeraj Rajagopal and Karthik Kappaganthu and Yiming Yang and Shyam Upadhyay and Manaal Faruqui and Mausam},
+  title     = {{AutoMix}: Automatically Mixing Language Models},
+  booktitle = {Advances in Neural Information Processing Systems 37 (NeurIPS)},
+  year      = {2024},
+  note      = {arXiv:2310.12963}
+}
+
+% ---------- Foundations / infrastructure ----------
+
+@misc{chen2021humaneval,
+  author        = {Mark Chen and Jerry Tworek and Heewoo Jun and Qiming Yuan and Henrique Ponde de Oliveira Pinto and Jared Kaplan and Harri Edwards and Yuri Burda and Nicholas Joseph and Greg Brockman and Alex Ray and Raul Puri and Gretchen Krueger and Michael Petrov and Heidy Khlaaf and Girish Sastry and Pamela Mishkin and Brooke Chan and Scott Gray and others},
+  title         = {Evaluating Large Language Models Trained on Code},
+  year          = {2021},
+  eprint        = {2107.03374},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2107.03374}
+}
+
+@inproceedings{kwon2023vllm,
+  author    = {Woosuk Kwon and Zhuohan Li and Siyuan Zhuang and Ying Sheng and Lianmin Zheng and Cody Hao Yu and Joseph E. Gonzalez and Hao Zhang and Ion Stoica},
+  title     = {Efficient Memory Management for Large Language Model Serving with {PagedAttention}},
+  booktitle = {Proceedings of the 29th ACM Symposium on Operating Systems Principles (SOSP)},
+  publisher = {ACM},
+  year      = {2023}
+}
+
+@misc{openai2025gptoss,
+  author        = {{OpenAI}},
+  title         = {gpt-oss-120b \& gpt-oss-20b Model Card},
+  year          = {2025},
+  eprint        = {2508.10925},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2508.10925}
+}
+
+@misc{yang2025qwen3,
+  author        = {An Yang and Anfeng Li and Baosong Yang and Beichen Zhang and Binyuan Hui and Bo Zheng and Bowen Yu and others},
+  title         = {Qwen3 Technical Report},
+  year          = {2025},
+  eprint        = {2505.09388},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2505.09388},
+  note          = {Qwen Team, Alibaba Group}
+}
+
+@misc{verilator,
+  author       = {Wilson Snyder},
+  title        = {Verilator: Open-Source {SystemVerilog} Simulator and Lint System},
+  howpublished = {\url{https://verilator.org}},
+  year         = {2026},
+  note         = {Accessed July 2026}
+}
+
+@inproceedings{wolf2013yosys,
+  author    = {Clifford Wolf and Johann Glaser},
+  title     = {Yosys -- {A} Free {Verilog} Synthesis Suite},
+  booktitle = {Proceedings of the 21st Austrian Workshop on Microelectronics (Austrochip)},
+  year      = {2013}
+}
+
+@misc{e203hbirdv2,
+  author       = {{Nuclei System Technology}},
+  title        = {{Hummingbirdv2 E203} Ultra-Low Power {RISC-V} Processor Core},
+  howpublished = {\url{https://github.com/riscv-mcu/e203_hbirdv2}},
+  year         = {2026},
+  note         = {Open-source project. Accessed July 2026}
+}
+
+@misc{opencores,
+  author       = {{OpenCores}},
+  title        = {{OpenCores}: Open-Source {IP} Cores Repository},
+  howpublished = {\url{https://opencores.org}},
+  year         = {2026},
+  note         = {Accessed July 2026}
+}
+
+@book{keating2002reuse,
+  author    = {Michael Keating and Pierre Bricaud},
+  title     = {Reuse Methodology Manual for System-on-a-Chip Designs},
+  edition   = {3rd},
+  publisher = {Kluwer Academic Publishers},
+  address   = {Boston, MA},
+  year      = {2002}
+}
+
+@misc{ieee1800,
+  author       = {{IEEE}},
+  title        = {{IEEE} Standard for {SystemVerilog}---Unified Hardware Design, Specification, and Verification Language},
+  howpublished = {IEEE Std 1800-2023},
+  year         = {2023}
 }
