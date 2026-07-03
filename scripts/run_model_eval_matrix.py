@@ -27,7 +27,7 @@ Eval arms map to existing runners:
 * mage-realbench / mage-rtllm / mage-verilog-eval -> run_mage_benchmarks.py
                       (run with --mage-python)
 
-Layout: <output-dir>/<model>/<eval>/... plus <output-dir>/<model>/logs/<eval>.log and
+Layout: <output-dir>/<model>/<eval>/... (results plus that eval's <eval>.log) and
 <output-dir>/<model>/vllm/ (server logs). A progressive matrix_summary.json records
 every deployment and eval outcome; --resume skips evals whose summary.json exists
 (and forwards --resume to the underlying runners).
@@ -457,8 +457,7 @@ def run_eval(
                 "metrics": extract_metrics(eval_name, summary_path)}
 
     command = build_eval_command(eval_name, entry, args, run_dir, handle.base_url)
-    log_path = model_dir / "logs" / f"{eval_name}.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path = run_dir / f"{eval_name}.log"
     env = dict(os.environ)
     env["VLLM_BASE_URL"] = handle.base_url
     env["VLLM_MODEL"] = entry["served_name"]
