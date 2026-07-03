@@ -1,0 +1,464 @@
+% !TeX root = ../main.tex
+
+\chapter{Results and Analysis}
+\label{ch:06}
+
+This chapter evaluates the pipeline (Sections~\ref{sec:results-headline}
+through~\ref{sec:results-budget}), the router
+(Section~\ref{sec:results-routing}), and then turns the instruments on the
+failures themselves (Sections~\ref{sec:results-failure}
+and~\ref{sec:results-artifacts}). All runs are identified by the labels of
+Table~\ref{tab:run-inventory}; all rates were recomputed directly from each
+run's per-sample records rather than transcribed from run logs.
+
+\section{Does Planning and Reuse Beat the Model Alone?}
+\label{sec:results-headline}
+
+The cleanest head-to-head is deterministic: one greedy sample per task,
+identical harness, \textsc{Pipe-t0} versus \textsc{Direct-t0}
+(Table~\ref{tab:headline}, Figure~\ref{fig:headline}).
+
+\begin{table}[htbp]
+  \centering
+  \caption[Headline comparison at temperature 0]{Grounded pipeline vs.\ pure
+    model on the 60 module tasks, temperature 0, one sample per task.}
+  \label{tab:headline}
+  \begin{tabular}{lrr}
+    \toprule
+    Arm & Syntax & Pass \\
+    \midrule
+    \textsc{Pipe-t0} (grounded planner + generator) & \textbf{37/60 = 61.7\,\%} & \textbf{15/60 = 25.0\,\%} \\
+    \textsc{Direct-t0} (pure model)                 & 16/60 = 26.7\,\% & 6/60 = 10.0\,\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figures/fig_headline_family.pdf}
+  \caption[Headline rates by task family]{Syntax and pass rates by family,
+    pure model vs.\ grounded pipeline (temperature 0, one sample). The
+    aggregate gain is carried almost entirely by the reuse-rich E203
+    family.}
+  \label{fig:headline}
+\end{figure}
+
+The pipeline delivers $2.3\times$ the syntax rate and $2.5\times$ the pass
+rate of the same model prompted directly. The family breakdown locates the
+entire effect. On AES --- small, self-contained, nothing to reuse --- the
+model alone nearly saturates syntax (83\,\%) and the pipeline merely does
+not hurt (pass unchanged at 33\,\%). On SDC the pipeline helps modestly
+(pass 21.4\,\% $\to$ 28.6\,\%). On E203, the family whose modules
+instantiate one another, the pipeline is decisive: syntax 10.0\,\% $\to$
+55.0\,\%, pass 2.5\,\% $\to$ 22.5\,\%. The conclusion we draw --- and will
+lean on again when routing --- is that \emph{the pipeline's value is
+proportional to how much legitimate IP reuse a task affords}. Where there
+is nothing to ground, planning is overhead; where the task is an exercise
+in wiring real submodules, injecting their true interfaces roughly decuples
+the syntax rate.
+
+\section{The Grounding Audit, and an Honest Null Result}
+\label{sec:results-grounding}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figures/fig_grounding_bar.pdf}
+  \caption[Grounding audit of reuse decisions]{Grounding outcomes for every
+    reuse decision in two runs. Near-miss names are remapped onto real
+    catalog ids; nothing hallucinated survives into the plan.}
+  \label{fig:grounding}
+\end{figure}
+
+Grounding-by-construction (Section~\ref{sec:pipeline-planner}) does exactly
+what it was built to do. In \textsc{Pipe-t0}, the 60 plans contain 109 reuse
+decisions: 105 already name an exact catalog id, 4 near misses are remapped,
+and 0 hallucinations survive (Figure~\ref{fig:grounding}). At twenty
+samples (\textsc{Cache-run}), the same mechanisms process 1{,}934 decisions:
+1{,}834 exact, 100 remapped, 0 leaked. Before the fix, plans routinely
+carried invented module names; after it, every reuse decision in every plan
+resolves to a real, provided module --- and the planner's reuse matrix,
+previously empty because decisions hid under a dozen ad-hoc JSON keys,
+became fully populated and auditable.
+
+And yet the end-to-end effect on quality is nearly zero: pass@1 moved from
+19.6\,\% (ungrounded twin run) to 20.2\,\% --- $+0.6$ percentage points,
+within noise. We report this null result deliberately. The generator was
+already silently discarding invented names and re-deriving reuse from the
+real dependency set, so grounding purchased plan \emph{correctness and
+auditability}, not yield. Plan quality was not the binding constraint;
+Sections~\ref{sec:results-failure} and~\ref{sec:results-artifacts} show
+what is.
+
+\section{Sampling Structure: pass@1 to pass@20}
+\label{sec:results-passk}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.75\textwidth]{figures/fig_passk_curves.pdf}
+  \caption[pass@k curves]{Unbiased pass@k on \textsc{Cache-off}
+    ($60\times20$). Diversity buys $+13$ points from $k{=}1$ to $k{=}20$,
+    but most of it is realized by $k{=}5$.}
+  \label{fig:passk}
+\end{figure}
+
+Figure~\ref{fig:passk} shows the sampling structure of the pipeline on
+\textsc{Cache-off}. Three facts matter downstream. First, diversity helps
+but saturates fast: pass@1 is 18.5\,\%, pass@5 already 26.6\,\%, pass@20
+only 31.7\,\% --- samples 6--20 add less than the first four. Second, the
+task universe splits sharply: 19 of 60 tasks are solved at least once in
+twenty tries; the other 41 never pass, at any $k$. Third, greedy decoding
+beats the sampled mean: the deterministic \textsc{Pipe-t0} scores 25.0\,\%
+against the temperature-sampled per-sample mean of 18.5--20.2\,\% --- the
+standard precision-versus-diversity trade (temperature is what buys the
+pass@20 headroom), with the caveat that the temp-0 and sampled runs also
+differ in search mode, so the comparison is directional.
+
+\section{Repair-Cache Ablation: Density, Not Solvability}
+\label{sec:results-cache}
+
+The cache trio (\textsc{Cache-off}/\textsc{-task}/\textsc{-run}) differs in
+exactly one flag, giving the thesis's cleanest three-arm ablation
+(Table~\ref{tab:cache}, Figure~\ref{fig:cache}).
+
+\begin{table}[htbp]
+  \centering
+  \caption[Repair-cache ablation]{Repair-cache scope ablation
+    ($60\times20$, gpt-oss-20B, identical configuration otherwise).}
+  \label{tab:cache}
+  \begin{tabular}{lrrrr}
+    \toprule
+    Cache scope & Syntax & pass@1 & pass@20 & mean repair attempts \\
+    \midrule
+    off  & 59.4\,\% & 18.5\,\% & \textbf{31.7\,\%} & 1.12 \\
+    task & 64.3\,\% & 19.6\,\% & \textbf{31.7\,\%} & 1.32 \\
+    run  & 66.9\,\% & 20.2\,\% & \textbf{31.7\,\%} & 1.61 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.72\textwidth]{figures/fig_cache_ablation.pdf}
+  \caption[Cache ablation metrics]{The cache lifts syntax monotonically and
+    drags pass@1 with it, but pass@20 does not move at all.}
+  \label{fig:cache}
+\end{figure}
+
+The cache does what a syntax-hint mechanism can do: verified fix hints lift
+the syntax rate monotonically ($+4.9$\,pp at task scope, $+7.5$\,pp at run
+scope) and pull per-sample pass up with it, at the cost of more repair
+turns taken. What it cannot do is change \emph{which} tasks are solvable:
+pass@20 is identical to the decimal across all three scopes. The cache
+shifts the density of passing samples inside already-solvable tasks;
+functional bugs --- the actual frontier --- are immune to syntax-diff
+hints.
+
+Two qualifications. First, these are three independently sampled runs, so
+the monotone ordering of syntax \emph{and} pass together is suggestive
+rather than proof; individual deltas of 1--2\,pp are within sampling noise.
+Second, run scope shares hints across a task's twenty samples, violating
+pass@k's independence assumption --- run-scope pass@k is shown only to
+demonstrate that even with that inflation pressure the solvable set does
+not budge. \textbf{Task scope is the methodologically safe default}, and it
+is what later runs adopt. Token totals across this trio are not comparable
+(the task/run arms were resumed mid-run; Section~\ref{sec:threats}); the
+one clean cost figure is \textsc{Cache-off}'s 46.3\,M estimated tokens for
+1{,}200 samples.
+
+\section{Functional Repair: a Separate, Oracle-Fed Arm}
+\label{sec:results-funcrepair}
+
+The functional repair loop and specification slicing
+(Sections~\ref{sec:pipeline-funcrepair}--\ref{sec:pipeline-slicing}) are
+evaluated as their own arm because their feedback signal is the scoring
+testbench itself. Raising the budgets from $2/4$ (\textsc{Func-2/4}) to
+$10/10$ (\textsc{Func-10/10}) lifts syntax from 60.3\,\% to 81.5\,\% and
+pass from 20.2\,\% to 27.5\,\% --- but at $2.7\times$ the cost (33.5\,M
+$\to$ 89.8\,M tokens). Attributing the $+44$ passing samples is sobering:
+$+37$ of them are candidates that, thanks to \emph{deeper syntax repair},
+now compile and then pass the testbench on their first functional check;
+only $+7$ net passes are attributable to the functional repair loop itself.
+(The two arms also differ in one scoring waiver --- \texttt{TIMESCALEMOD}
+warnings suppressed in \textsc{Func-10/10} --- so the syntax delta slightly
+overstates the budget effect alone.) The loop's value proposition ---
+oracle feedback included --- is thin; the next section shows why.
+
+\section{Repair-Budget Calibration: Fix Fast or Never}
+\label{sec:results-budget}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figures/fig_repair_budget.pdf}
+  \caption[Repair-attempt distributions]{\textsc{Func-10/10}: outcomes by
+    repair attempts consumed. Left: samples by syntax-repair attempts;
+    nearly every bucket short of the cap ends syntax-clean, while the cap
+    bucket (10) is 95\,\% failures. Right: compiling samples by
+    functional-repair attempts; every rescue lands by attempt~7, and 324
+    samples burn the full budget converting nothing.}
+  \label{fig:budget}
+\end{figure}
+
+Both repair phases share one shape --- \emph{fix fast or never} --- but
+with very different economics (Figure~\ref{fig:budget}).
+
+\paragraph{Syntax repair earns its budget.}
+In \textsc{Func-10/10}, 219 samples compile without repair; repair rescues
+another 265 by attempt~9, with meaningful yield still arriving at attempts
+4--6; the cap bucket is where hope goes to die (98 samples reach attempt~10;
+5 succeed). The independent \textsc{Router-2t} run confirms the shape at
+budget $6/4$: 202 born-clean, 234 repair-rescued with a real tail across
+all six attempts (77/54/44/23/22/14), 164 exhausted. A syntax budget of
+about six captures nearly all attainable value.
+
+\paragraph{Functional repair does not.}
+Of the compiling samples in \textsc{Func-10/10} that enter the functional
+phase failing, the loop rescues 19 --- every one by attempt~7 --- while
+\textbf{324 samples burn all ten attempts and convert zero}. Since each
+attempt is a full compile-plus-simulation (up to 300\,s) plus an LLM call,
+$3{,}240$ of $3{,}324$ functional-repair attempts --- 98\,\% of the
+phase's compute --- produced no pass. This is where the arm's $2.7\times$
+cost blow-up lives. \textsc{Router-2t} again confirms at scale: 13
+functional rescues against 252 exhausted samples, and on its direct flow
+the loop is essentially dead (2 rescues in 342 samples). The prescription
+adopted for later runs: syntax cap ${\approx}6$, functional cap
+${\leq}4$, plus a no-progress early exit (abort when the mismatch count
+stops dropping). The deeper reason functional repair fails so often ---
+the mismatch signal itself is frequently uninformative or misleading ---
+surfaces in Section~\ref{sec:results-artifacts}.
+
+\section{Routing: Union Coverage at a Fraction of the Compute}
+\label{sec:results-routing}
+
+\begin{table}[htbp]
+  \centering
+  \caption[Routing ablation arms]{Routing arms (gpt-oss-20B). Solved =
+    tasks with $\geq$1 passing sample. $\Sigma$wall sums per-sample
+    wall-clock. Token totals marked $^{+}$ are lower bounds
+    (direct-flow repair calls are not instrumented). \textsc{Hybrid} and
+    \textsc{Func-10/10} use budgets $10/10$ and predate direct-flow
+    repair; the single-variable comparison is
+    \textsc{Router-t1}$\to$\textsc{Router-2t}.}
+  \label{tab:routing}
+  \small
+  \begin{tabular}{lrrrrr}
+    \toprule
+    Arm & Samples & pass@10 & Solved/60 & $\Sigma$wall (h) & Mtok/solved \\
+    \midrule
+    \textsc{Hybrid} (both flows)      & $600{+}600$ & 46.3\,\% & 30 & 423 & 3.24$^{+}$ \\
+    \textsc{Func-10/10} (pipeline only) & 600 & 38.3\,\% & 23 & 402 & 3.90 \\
+    \textsc{Router-t1} (probe only)   & 600 & 35.0\,\% & 21 & 213 & 2.17 \\
+    \textsc{Router-2t} (full cascade) & 600 & \textbf{56.7\,\%} & \textbf{34} & \textbf{130} & \textbf{0.83}$^{+}$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.8\textwidth]{figures/fig_routing_frontier.pdf}
+  \caption[Routing frontier]{Tasks solved vs.\ total compute. The full
+    cascade router solves the most tasks of any arm at less than a third
+    of the compute of running both flows everywhere.}
+  \label{fig:frontier}
+\end{figure}
+
+Table~\ref{tab:routing} and Figure~\ref{fig:frontier} give the routing
+result. Three comparisons carry the argument.
+
+\paragraph{Tier-1 alone is toothless.}
+\textsc{Router-t1} exposes only the plan probe, and the probe --- which by
+design defaults to keeping the sunk-cost plan --- routed every task to the
+pipeline. The arm therefore collapses to pipeline-only at budget $6/4$
+(21 solved), and usefully so: it is the controlled base for the cascade.
+
+\paragraph{The cascade is a strict win over its own ablation.}
+\textsc{Router-t1}$\to$\textsc{Router-2t} changes exactly one thing:
+Tier-0 LLM pre-routing in front of the probe (which then handles only the
+5 of 60 tasks Tier-0 deferred). Solved tasks jump $21 \to 34$ and pass@10
+$35.0\,\% \to 56.7\,\%$ \emph{while total compute falls} $213 \to 130$
+hours --- more coverage for less work, because 342 of 600 samples run on
+the direct flow at roughly a tenth of a pipeline sample's token cost. Per
+solved task, the cascade spends 0.83\,M tokens against the brute-force
+hybrid's 3.24\,M --- roughly $4\times$ more token-efficient.
+
+\paragraph{Against the hybrid ceiling, directionally ahead.}
+\textsc{Router-2t} solves 34 tasks where \textsc{Hybrid} --- running both
+flows on everything --- solves 30 at $3.3\times$ the compute. This
+comparison is \emph{not} single-variable: the hybrid predates the
+direct-flow repair loop (its direct samples compiled at 24.2\,\% vs.\ the
+router run's 76.0\,\%) and used $10/10$ budgets, so part of the router
+run's edge is repair, not routing. We therefore claim only that the
+cascade \emph{reaches at least union-level coverage at a fraction of the
+cost}, not that it strictly beats the union. Notably, the two hybrid-solved
+tasks the router run misses (\texttt{e203\_exu\_branchslv},
+\texttt{e203\_ifu\_ift2icb}) were \emph{correctly routed} --- both are
+direct-only tasks that the hybrid's pipeline flow also never solved
+(0/10 each) --- and were lost to sampling variance on low-yield tasks
+(2/10 and 1/10 direct yields), not to the routing policy or the trimmed
+budgets.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.85\textwidth]{figures/fig_router_confusion.pdf}
+  \caption[Router confusion vs.\ oracle labels]{Flow allocation against
+    oracle task classes for the full cascade, both model sizes. Misroutes
+    concentrate in A$\to$direct: pipeline-favoring tasks sent to the cheap
+    flow.}
+  \label{fig:confusion}
+\end{figure}
+
+\paragraph{Where the router is still wrong.}
+Scored against the oracle labels (Figure~\ref{fig:confusion}), the 20B
+cascade misroutes 158 of 600 samples (26\,\%), dominated by A$\to$direct
+(110): wrapper tasks sent to the flow that cannot see their submodule
+interfaces. The probe tier is underused (5 of 60 tasks), and 22 of 279
+generated plans are discarded --- the cascade's modest overhead. With
+gpt-oss-120B the same router solves the same 34 tasks at pass@1 41.2\,\%
+(vs.\ 30.7\,\%) and misroutes drop to 141, differently distributed
+(A$\to$direct falls to 71; B$\to$pipeline rises to 70): the bigger model's
+feature extractor defers less and trusts the pipeline more. Closing the
+A$\to$direct gap --- e.g.\ by letting spec-level uncertainty trigger the
+probe more aggressively --- is the router's clearest headroom.
+
+\section{Failure Taxonomy: Three Tiers of Difficulty}
+\label{sec:results-failure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.9\textwidth]{figures/fig_failure_taxonomy.pdf}
+  \caption[Outcome taxonomy across runs]{Per-sample outcomes. As models and
+    repair improve, the red syntax band shrinks --- and the amber
+    compiles-but-fails-testbench band absorbs it. The functional share of
+    compiling samples is essentially model-invariant.}
+  \label{fig:taxonomy}
+\end{figure}
+
+Figure~\ref{fig:taxonomy} decomposes every sample into four outcomes. The
+picture is consistent across runs: the largest failure bucket is not
+syntax but \emph{compiles-and-fails-the-testbench} --- right ports, right
+structure, wrong logic. Among compiling samples, that share is 59.5\,\% in
+\textsc{Pipe-t0}, 68.9\,\% in \textsc{Cache-off}, and 67.9\,\% in
+\textsc{Pipe-120b}. The $6\times$ larger model is a strictly better
+Verilog \emph{syntactician} --- syntax 59.4\,\% $\to$ 76.3\,\%, first-pass
+compiles up, repair turns down --- but it is \emph{not} a better logician:
+the functional share of compiling samples does not move. Scale fixes
+syntax, not semantics; this is the strongest evidence that the functional
+ceiling is structural rather than a capability artifact of the 20B model.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.8\textwidth]{figures/fig_error_classes.pdf}
+  \caption[Verilator error classes]{Verilator diagnostic classes among the
+    442 syntax-failing samples of \textsc{Cache-off} (a sample can carry
+    several classes).}
+  \label{fig:errclasses}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.72\textwidth]{figures/fig_module_heatmap.pdf}
+  \caption[Per-module pass fraction across runs]{Pass fraction per task
+    (rows, grouped AES/SDC/E203) across six runs (columns). The three
+    difficulty tiers are visible as texture: saturated rows (leaf/glue
+    modules), intermittent rows (logic-limited datapath modules), and
+    blank rows (giant integrators).}
+  \label{fig:heatmap}
+\end{figure}
+
+Reading failures per module (Figures~\ref{fig:errclasses}
+and~\ref{fig:heatmap}) resolves the aggregate into three stable tiers:
+
+\begin{enumerate}
+  \item \textbf{Solved: leaf, RAM, and glue modules.}
+    \texttt{aes\_key\_expand\_128}, the CRC and RAM blocks, clock gating,
+    register files --- small, well-specified, often pure reuse. The
+    pipeline has essentially retired this tier.
+  \item \textbf{Logic-limited: datapath and control modules.} Most AES
+    round logic and the E203 ALU/decode/commit/dispatch cluster compile
+    with perfect syntax and fail the testbench --- some at 0 passes despite
+    dozens of structurally distinct compiling candidates. The syntax-only
+    repair loop is blind here by construction.
+  \item \textbf{Scale-limited: giant integrators.}
+    \texttt{e203\_core/cpu/exu/lsu}, \texttt{sdc\_controller}: hundreds of
+    ports, dozens of submodules. Failures are interface-completeness
+    (\texttt{PINNOTFOUND} concentrates exactly here), context overflow
+    (the not-generated bucket: timeouts, empty returns, and HTTP~400s on
+    the biggest specs), and integration logic. Notably, plan-level
+    interface hallucination reappears \emph{only} on this tier --- the
+    \texttt{e203\_exu} plan promotes 25 internal signals to phantom top
+    ports while dropping 10 real ones --- the same
+    interface-too-large-to-hold phenomenon at a different stage.
+\end{enumerate}
+
+Each tier wants a different intervention --- nothing (tier~1), functional
+feedback (tier~2), decomposition and contract enforcement (tier~3) ---
+which is why aggregate pass rate alone is a blunt instrument for steering
+this system.
+
+\section{When the Benchmark Is Wrong: Scoring Artifacts}
+\label{sec:results-artifacts}
+
+Treating every 0\,\% module as model failure would misdirect the next
+round of engineering, so the persistent zeros were audited individually
+with a golden-model methodology: run the benchmark's \emph{own reference
+implementation} through the full scoring path, and if the golden fails (or
+a byte-equivalent candidate fails), the task's zeros are artifacts, not
+model errors. Three audits produced three different verdicts.
+
+\paragraph{The AES S-box race (confirmed artifact, since fixed upstream).}
+\texttt{aes\_sbox} and \texttt{aes\_inv\_sbox} scored 0 across all runs
+with one suspicious signature: every sample --- combinational,
+ROM-array, or registered variants alike --- reported \emph{exactly} 766
+mismatches. Diffing showed generated lookup tables byte-identical to the
+golden. The cause is a testbench race: stimulus changes the input and
+samples the output in the same simulation timestep, so any
+correct-but-differently-scheduled implementation (e.g.\ a continuous
+\texttt{assign} where the reference uses blocking \texttt{always @(a)})
+settles one delta cycle late at each of the ${\sim}768$ input transitions.
+The trigger was isolated by incremental flag bisection to Verilator's
+\texttt{--coverage-line} instrumentation --- the identical design passes
+without it --- and the recorded mismatch count decomposes \emph{exactly}
+as $766 + 3\times(\text{wrong table bytes})$, meaning the artifact also
+corrupts mismatch counts as a repair signal: a one-byte-wrong design
+(0.4\,\% wrong) reports ${\sim}50\,\%$ mismatches. A registered-output
+module using the same testbench template (\texttt{aes\_key\_expand\_128})
+passes 20/20, completing the case that this is a combinational-settling
+race. Impact: 21 byte-perfect samples scored zero in \textsc{Cache-off}
+alone, and 2 of 60 tasks were unsolvable purely by artifact. The finding
+was reported and the benchmark's testbench was repaired upstream on
+June~25,~2026 (settle before compare); pre-/post-fix runs are never
+compared on these two tasks.
+
+\paragraph{The SDC controller (audited, genuine).}
+\texttt{sdc\_controller} --- 0 functional passes in 220 records --- looked
+like a candidate for the same treatment and is the reason the golden
+methodology matters: its golden implementation passes its testbench
+perfectly (0 mismatches in 23{,}932 checks) under the full scoring flags,
+because all its outputs are registered and immune to the settling race.
+The zeros are honest: 87\,\% of SDC samples die on syntax through
+interface hallucination introduced at the \emph{generation} stage
+(instantiating provided submodules with invented pins, inventing a
+different master-bus naming, dropping the \texttt{sd\_defines} macros) even
+when the plan's interface is correct --- and the 13\,\% that compile are
+grossly wrong (${\sim}95\,\%$ mismatch rates), not near misses.
+
+\paragraph{The repair gate that fights the scorer (pipeline artifact).}
+Auditing the 97 samples of \textsc{Func-10/10} that exhausted all ten
+syntax repairs found that 42 of them (43\,\%) fail on a fatal
+\emph{warning} located in a benchmark harness file
+(\texttt{stimulus\_gen}/\texttt{ref}) --- code the model cannot edit. The
+internal repair gate (\texttt{verilator --lint-only}) treats three warning
+classes as fatal that the actual scorer's build does not even emit, so on
+four tasks every sample burned its entire repair budget ``fixing''
+correct code and never reached the functional phase. Golden test again:
+three of the four goldens pass the real scoring build (pure pipeline
+artifact; the fix is to mirror the scorer's waivers in the gate), while
+the fourth (\texttt{e203\_reset\_ctrl}) fails \emph{even as golden} ---
+a genuine benchmark defect of the AES class. The remaining 53\,\% of
+repair-exhausted samples fail on real errors in generated code,
+concentrated on the giant integrators of tier~3.
+
+The methodological point generalizes beyond this benchmark: in a harness
+this strict, \emph{persistent zeros deserve a golden-model audit before
+they are allowed to steer engineering effort} --- of our three audits, one
+exonerated the models, one convicted them, and one convicted our own
+tooling.

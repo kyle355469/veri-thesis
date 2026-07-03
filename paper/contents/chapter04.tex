@@ -1,13 +1,163 @@
 % !TeX root = ../main.tex
 
-\chapter{英文測試}
+\chapter{Cascade Routing between Direct and Pipeline Flows}
+\label{ch:04}
 
-\section{出師表}
+The pipeline of Chapter~\ref{ch:03} is not uniformly better than simply
+asking the model for the module. On a substantial class of tasks it is
+\emph{worse}: its planning and reuse scaffolding invents structure that a
+self-contained module does not need, and derails a generation that a bare
+prompt would have gotten right. This chapter presents the second
+contribution of the thesis: a per-task \emph{cascade router} that predicts,
+before spending pipeline-scale compute, which of two flows a task should
+take --- the full agentic pipeline, or a cheap \emph{direct} single-shot
+generation. Section~\ref{sec:router-motivation} establishes why the two
+flows are complementary; Section~\ref{sec:router-classes} defines the task
+classes and the oracle labels used to evaluate routing;
+Section~\ref{sec:router-design} describes the two-tier cascade; and
+Section~\ref{sec:router-metrics} defines the routing-specific metrics used
+in Section~\ref{sec:results-routing}.
 
-\lipsum
+\section{Motivation: Two Complementary Flows}
+\label{sec:router-motivation}
 
-\section{短歌行}
+Running \emph{both} flows on all 60 tasks (the \textsc{Hybrid} arm of
+Table~\ref{tab:run-inventory}) reveals a clean division of labor. With ten
+samples per flow, the pipeline alone solves 20 tasks and the direct flow
+alone solves 22 --- but their union solves 30, because the two sets overlap
+only partially. Wrapper and integration modules pass under the pipeline,
+which supplies the exact interfaces of the submodules they must instantiate
+and wire; self-contained algorithmic modules pass under direct generation,
+which lets the model write the datapath in one coherent piece without the
+pipeline's decomposition machinery second-guessing it. Neither flow
+dominates: each one's strength is the other's failure mode.
 
-\lipsum
+The obvious exploitation of complementarity --- run both flows on every
+task --- is also the most expensive one, and it wastes most of its budget:
+every direct sample spent on a wrapper module and every pipeline run spent
+on a self-contained ALU is compute that predictably converts to nothing.
+A router that sends each task to its matching flow can, in principle, reach
+the union coverage at roughly half the cost. The routing problem is to make
+that prediction \emph{before} the expensive flow has been paid for.
 
-This is just to test \cite{Krasnogor2004e} the cite function.
+\section{Task Classes and Oracle Labels}
+\label{sec:router-classes}
+
+We formalize the division as two task classes:
+
+\begin{description}
+  \item[Class A (structural).] Wrapper, integration, and memory-encapsulation
+    modules: the module's own logic is thin; its difficulty is wiring
+    externally defined submodule interfaces correctly. Class~A tasks want
+    the \textbf{pipeline}.
+  \item[Class B (algorithmic).] Self-contained datapath or control modules
+    --- cipher rounds, CRC, instruction decode, address generation: the
+    difficulty is the logic itself, not integration. Class~B tasks want
+    \textbf{direct} generation.
+\end{description}
+
+For evaluation only, each task receives an oracle label computed from its
+\emph{golden} implementation: the reference RTL is synthesized with Yosys,
+submodule instances are subtracted, and the task is labeled~A if its own
+synthesized logic falls below a 250-cell threshold (or it is a recognized
+regular-array wrapper), otherwise~B. The label also fixes the task's
+\emph{target flow} (A$\to$pipeline, B$\to$direct). Oracle labels use golden
+RTL that no generation-time component may see; they exist so that routing
+accuracy can be scored, and they define the ceiling arm (\texttt{oracle}) in
+the ablation of Section~\ref{sec:results-routing}.
+
+\section{The Two-Tier Cascade}
+\label{sec:router-design}
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+      font=\small,
+      node distance=9mm and 14mm,
+      box/.style={draw, rounded corners=2pt, align=center, inner sep=5pt,
+                  minimum height=8mm},
+      dec/.style={draw, diamond, aspect=2.2, align=center, inner sep=1.5pt},
+      flow/.style={draw, rounded corners=2pt, align=center, inner sep=5pt,
+                   minimum height=8mm, very thick},
+      arr/.style={-{Stealth[length=2.5mm]}},
+    ]
+    \node[box] (spec) {task specification};
+    \node[box, below=of spec] (feat) {Tier-0: feature extraction\\(LLM judge over the spec)};
+    \node[dec, below=of feat] (pre) {pre-route\\decision};
+    \node[flow, below left=13mm and 16mm of pre] (direct) {\textbf{direct flow}\\single-shot generation\\+ repair loops};
+    \node[flow, below right=13mm and 16mm of pre] (pipe) {\textbf{pipeline flow}\\plan $\to$ generate\\+ repair loops};
+    \node[box, below=17mm of pre] (plan) {Tier-1: run planner once,\\probe the structured plan};
+    \node[dec, below=of plan] (probe) {plan\\verdict};
+    \draw[arr] (spec) -- (feat);
+    \draw[arr] (feat) -- (pre);
+    \draw[arr] (pre) -| node[above, pos=0.25]{algorithmic (B)} (direct);
+    \draw[arr] (pre) -| node[above, pos=0.25]{structural (A)} (pipe);
+    \draw[arr] (pre) -- node[right]{uncertain} (plan);
+    \draw[arr] (plan) -- (probe);
+    \draw[arr] (probe) -| node[above, pos=0.25]{self-contained} (direct);
+    \draw[arr] (probe) -| node[above, pos=0.25]{delegates (keep plan)} (pipe);
+  \end{tikzpicture}
+  \caption[Cascade router decision flow]{The two-tier cascade router. Tier-0
+    routes confident tasks from spec-level features alone; only uncertain
+    tasks pay for a planner call, whose structured plan Tier-1 probes. A
+    task routed to direct after planning discards the plan (a ``wasted
+    plan'').}
+  \label{fig:router-flow}
+\end{figure}
+
+The router is a cascade of two increasingly expensive tests
+(Figure~\ref{fig:router-flow}); a task exits at the first tier that is
+confident.
+
+\paragraph{Tier-0: spec pre-route.}
+A feature extractor reads the specification and emits seven structured
+judgments: whether the module delegates to submodules, is a memory
+encapsulation, or is thin pass-through control (all class-A signals);
+whether it contains a finite-state machine, clock-domain crossing, or a
+datapath algorithm (class-B signals); and an estimate of the state bits the
+module itself must hold, plus a confidence value. The production extractor
+is a small LLM call that returns this JSON verdict (a regex-based keyword
+extractor over the same features serves as the ablation baseline ---
+Section~\ref{sec:results-routing}); the decision rule is deliberately
+transparent: any algorithmic signal routes to \emph{direct}, else any
+structural signal routes to \emph{pipeline}, else --- or when the
+extractor's confidence is below threshold --- the task falls through as
+\emph{uncertain}. One subtlety the LLM extractor handles and keywords
+cannot: a module can \emph{sound} algorithmic (``preliminary decoding'')
+while actually being a wrapper that instantiates the real decoder, and only
+whole-spec reading resolves that.
+
+\paragraph{Tier-1: plan probe.}
+Uncertain tasks run the planner once --- the cheapest informative pipeline
+component --- and the router probes the resulting structured plan's own
+natural-language requirement summary. Decisive delegation phrasing
+(``wraps'', ``encapsulates'', ``reuses existing'', or instantiation language
+without any own-implementation verb) keeps the task in the pipeline, plan
+in hand; clear self-contained-algorithm phrasing routes it to direct,
+\emph{discarding} the plan. The asymmetry of the default is intentional:
+the plan is already a sunk cost, so the probe bails to direct only when the
+module is clearly self-contained. A plan generated and then discarded is
+counted as a \emph{wasted plan} --- the cascade's overhead metric.
+
+\paragraph{The direct flow.}
+The direct arm is not a bare completion: it shares the generator's repair
+machinery. A directly generated candidate that fails the internal lint
+enters the same syntax repair loop, and (in arms where functional repair is
+enabled) the same functional repair loop, with the plan-dependent prompt
+sections simply absent. This matters for the routing economics: direct
+generation costs roughly 10--12\,k tokens per sample against the pipeline's
+90--153\,k, so every correctly-routed class-B task buys nearly an order of
+magnitude of compute reduction at equal or better quality.
+
+\section{Routing Metrics}
+\label{sec:router-metrics}
+
+Section~\ref{sec:results-routing} evaluates routing arms on four axes:
+\emph{coverage} (solved tasks and pass@k, against the \textsc{Hybrid} union
+as the attainable ceiling); \emph{routing accuracy} (the confusion between
+oracle class and chosen flow, where both misroute directions ---
+A$\to$direct and B$\to$pipeline --- forfeit a would-be pass);
+\emph{overhead} (wasted plans); and \emph{efficiency} (estimated tokens and
+summed compute per solved task). The design goal is stated once and
+measured throughout: reach the union coverage of both flows at the lowest
+compute, with misroutes near zero.
