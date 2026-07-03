@@ -72,6 +72,6 @@ vllm serve "$MODEL" \
   --dtype "$DTYPE" \
   --trust-remote-code \
   --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
-  "${TP_ARGS[@]}" \
+  --tensor-parallel-size 8 \
   "${TOOL_ARGS[@]}" \
   "$@"
