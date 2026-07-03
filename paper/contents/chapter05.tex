@@ -29,13 +29,14 @@ are supplied by the evaluation environment.
   \caption[RealBench module-level task families]{The 60 module-level
     RealBench tasks used in this thesis, by source project.}
   \label{tab:families}
+  \small
   \begin{tabular}{llrl}
     \toprule
     Family & Source project & Tasks & Character \\
     \midrule
     AES  & OpenCores AES-128 cipher core & 6  & self-contained datapath logic \\
     SDC  & OpenCores SD-card controller  & 14 & bus-facing control logic \\
-    E203 & Nuclei HummingBirdv2 E203 RISC-V core & 40 & deep module hierarchy, reuse-rich \\
+    E203 & HummingBirdv2 E203 RISC-V core & 40 & deep hierarchy, reuse-rich \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -197,7 +198,7 @@ repair-attempt budgets of Section~\ref{sec:pipeline-repair}.
   \caption[Run labels to repository directories]{Mapping from run labels to
     repository directories under \texttt{runs/}.}
   \label{tab:run-dirs}
-  \small
+  \footnotesize
   \begin{tabular}{ll}
     \toprule
     Label & Directory \\

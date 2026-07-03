@@ -33,7 +33,7 @@
 % 加載套件（Include Packages）
 % --------------------------------------------------
 
-\usepackage[sort&compress]{natbib}      % 參考文獻
+\usepackage[numbers,sort&compress]{natbib}      % 參考文獻（數字式引用，配合 abbrv）
 \usepackage{amsmath, amsthm, amssymb}   % 數學環境
 \usepackage{ulem, CJKulem}              % 下劃線、雙下劃線與波浪紋效果
 \usepackage{booktabs}                   % 改善表格設置
@@ -43,12 +43,16 @@
 \usepackage{longtable}                  % 支援跨頁長表格
 \usepackage{paralist}                   % 列表環境
 \usepackage{listings}                   % 程式碼（Verilog / JSON 片段）
+\usepackage{xurl}                       % 參考文獻長網址允許任意斷行
 \usepackage{tikz}                       % 路由器流程圖
 \usetikzlibrary{arrows.meta, positioning, shapes.geometric}
 
 % --------------------------------------------------
 % 套件設定（Packages Settings）
 % --------------------------------------------------
+
+% 放寬段落斷行（Times 字型下避免 Overfull hbox）
+\emergencystretch=3em
 
 % Verilog / generic code listings
 \lstdefinelanguage{Verilog}{
