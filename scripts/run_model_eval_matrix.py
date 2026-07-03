@@ -295,6 +295,52 @@ def stop_server(handle: ServerHandle, args: argparse.Namespace) -> None:
 # Eval commands
 # --------------------------------------------------------------------------- #
 
+# The benchmark runners default to token budgets sized for ~128k-context models
+# (--max-tokens/--legacy-max-tokens 80000, --planner-max-tokens 100000, prompt
+# budgets ~200k chars). vLLM rejects any request where prompt_tokens + max_tokens
+# exceeds max_model_len (it does not clamp), so every deployed model gets its
+# budgets derived from its own context window here. Entry-level eval_extra_args
+# and --extra-arg are appended after these and win (argparse keeps the last value).
+CHARS_PER_TOKEN = 4  # conservative chars->tokens heuristic for prompt-side budgets
+PROMPT_MARGIN_TOKENS = 1024  # chat template + system/instruction overhead
+
+
+def context_budget_args(eval_name: str, entry: Dict[str, Any]) -> List[str]:
+    """Token/prompt-budget flags for one eval, derived from the model's max_model_len.
+
+    Split the window roughly in half: the completion cap gets one half, the prompt
+    side gets the rest minus a margin, so prompt + max_tokens always fits. Budgets
+    are only ever lowered below the runners' defaults, never raised.
+    """
+    limit = int(entry.get("max_model_len", 32768))
+    completion = max(2048, limit // 2)
+    prompt_tokens = max(2048, limit - completion - PROMPT_MARGIN_TOKENS)
+    prompt_chars = prompt_tokens * CHARS_PER_TOKEN
+    condense_tokens = int(prompt_tokens * 0.75)
+
+    direct_flags = ["--max-tokens", str(min(80000, completion))]
+    pipeline_flags = [
+        "--planner-max-tokens", str(min(100000, completion)),
+        "--legacy-max-tokens", str(min(80000, completion)),
+        "--spec-condense-threshold-tokens", str(min(45000, condense_tokens)),
+        "--spec-condense-threshold-chars", str(min(200000, condense_tokens * CHARS_PER_TOKEN)),
+        "--legacy-spec-max-chars", str(min(120000, int(prompt_chars * 0.6))),
+        "--legacy-prompt-budget-chars", str(min(200000, prompt_chars)),
+        "--candidate-total-budget-chars", str(min(80000, int(prompt_chars * 0.4))),
+    ]
+
+    if eval_name == "realbench-pure":
+        return direct_flags
+    if eval_name == "realbench-router":
+        # Forwarded leniently to both underlying runners; each ignores the
+        # other's flags.
+        return direct_flags + pipeline_flags
+    if eval_name.startswith(("rtllm-", "verilog-eval-")):
+        return pipeline_flags
+    if eval_name.startswith("mage-"):
+        return ["--context-window", str(limit), "--max-token", str(min(8192, completion))]
+    return []
+
 
 def eval_run_dir(model_dir: Path, eval_name: str) -> Path:
     return model_dir / eval_name
@@ -386,6 +432,7 @@ def build_eval_command(
     else:
         raise ValueError(f"unknown eval {eval_name!r}")
 
+    command += context_budget_args(eval_name, entry)
     for extra in args.extra_arg:
         prefix, _, flag = extra.partition(":")
         if prefix == eval_name and flag:
