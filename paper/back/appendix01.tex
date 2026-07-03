@@ -1,5 +1,87 @@
 % !TeX root = ../main.tex
 
-\appendix{A}{Introduction}
-\section{Introduction}
-\section{Further Introduction}
+\appendix{A}{Prompt Templates}
+\label{app:prompts}
+
+This appendix reproduces the load-bearing prompt text of the system, so
+that the mechanisms described in Chapters~\ref{ch:03} and~\ref{ch:04} can
+be audited at the level at which they actually operate. Text is excerpted
+verbatim from the repository (\texttt{agentic\_ip\_reuse/.../prompts.py}
+and \texttt{ip\_reuse\_legacy/prompts.py}); ellipses mark elisions.
+
+\section{Planner System Prompt (Catalog-Grounding Core)}
+
+The planner's system prompt walks the model through the eight planning
+stages and --- decisive in practice --- mandates the closed catalog
+vocabulary:
+
+\begin{lstlisting}[language={},caption={Planner system prompt, grounding
+section (excerpt).},label={lst:planner-prompt}]
+CATALOG GROUNDING (mandatory): The reusable-IP catalog for this
+task is listed verbatim in the user message under "Reusable IP
+catalog". Treat it as the only source of truth for which IPs
+exist.
+- Every reuse_decisions entry MUST set "selected_ip" to an
+  "ip_id" that appears EXACTLY in that list.
+- Never invent, rename, or add suffixes to an IP name (e.g. do
+  not turn "e203_exu" into "e203_exu_core").
+- If no catalog IP fits a module, set "new_rtl_required": true
+  and "selected_ip": null for that module instead of guessing a
+  name.
+- Produce one reuse_decisions entry for every module that has a
+  candidate IP in the catalog.
+...
+Return final output as one JSON object only, with keys:
+requirements, modules, reuse_decisions, integration_plan,
+verification_plan, debug_plan, unresolved_assumptions.
+\end{lstlisting}
+
+The user message then carries the injected catalog digest (one line per
+provided module: \texttt{ip\_id}, port summary, one-sentence description)
+and closes with: \emph{``Every reuse\_decisions.selected\_ip must be one
+of the ip\_id values listed in the catalog above; do not invent
+names.''} As Section~\ref{sec:results-grounding} showed, models comply
+with the vocabulary yet never call the retrieval tools also offered ---
+which is why the post-hoc grounding pass of
+Section~\ref{sec:pipeline-planner} remains in place as the enforcement
+backstop.
+
+\section{Generation Prompt Structure}
+
+The generator prompt is assembled from five blocks, in order: (1)~the
+(possibly condensed) specification; (2)~the source of every reused module,
+prefixed with the environment note that these modules \emph{are provided
+as files and must be instantiated, never re-declared}; (3)~environment
+notes (macros defined by the build, the one not-shipped dependency);
+(4)~the testbench's DUT instantiation, verbatim, introduced as the binding
+port contract; and (5)~the output-format instruction (one complete Verilog
+module in a fenced code block).
+
+\section{Functional Repair Prompt}
+
+The functional repair turn (Section~\ref{sec:pipeline-funcrepair})
+re-frames the task as logic repair on a design whose interface is already
+correct. Its distinctive elements:
+
+\begin{lstlisting}[language={},caption={Functional repair prompt, framing
+(paraphrased structure; mismatch report inserted verbatim).},label={lst:func-prompt}]
+The following {target_hdl} design COMPILES and matches the
+required port interface, but its outputs MISMATCH the reference
+testbench:
+
+<verbatim simulator mismatch report, e.g.
+ "Output 'b' has 23 mismatches. First mismatch at time 115.">
+
+Fix the LOGIC only. Do not change the module name or the port
+list. Reused modules listed as provided source files must only
+be instantiated, never re-declared in your output.
+
+<behavioral slice: specification sections mentioning the
+ mismatching output identifiers, plus verbatim interface
+ excerpts (Section 3.4.3); full spec if no identifier named>
+\end{lstlisting}
+
+When the repair loop runs on the direct flow (no plan), the reuse-framing
+block is dropped and the same skeleton applies --- the mechanism by which
+the router's direct arm shares the pipeline's repair machinery
+(Section~\ref{sec:router-design}).
