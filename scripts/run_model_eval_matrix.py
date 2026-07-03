@@ -117,11 +117,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="Print deployments and commands without running anything.")
     parser.add_argument("--stop-on-error", action="store_true", help="Abort the matrix on the first failed eval (default: continue).")
 
-    parser.add_argument("--python", default=str(Path.home() / "venv-verilog" / "bin" / "python"),
+    parser.add_argument("--python", default=str("python3"),
                         help="Python used for the veri-thesis benchmark runners.")
-    parser.add_argument("--mage-python", default=str(Path.home() / "venv-mage" / "bin" / "python"),
+    parser.add_argument("--mage-python", default=str("python3"),
                         help="Python with MAGE deps (llama-index etc.) for mage-verilog-eval.")
-    parser.add_argument("--vllm-venv", default=str(Path.home() / "venv-verilog"),
+    parser.add_argument("--vllm-venv", default=str("python3"),
                         help="Venv containing vllm; its bin/ is prepended to PATH for vllm_deploy.sh.")
     parser.add_argument("--port-start", type=int, default=8100)
     parser.add_argument("--deploy-timeout-s", type=int, default=1800)
