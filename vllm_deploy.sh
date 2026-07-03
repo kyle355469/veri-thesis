@@ -19,11 +19,11 @@ if [ -z "${TOOL_CALL_PARSER:-}" ]; then
     *) TOOL_CALL_PARSER=hermes ;;
   esac
 fi
-if [ -z "${TENSOR_PARALLEL_SIZE:-}" ]; then
-  case "$MODEL" in
-    Qwen/Qwen3-4B-Thinking-2507-FP8) TENSOR_PARALLEL_SIZE=4 ;;
-    *) TENSOR_PARALLEL_SIZE=8 ;;
-  esac
+# Only forwarded to vllm when set explicitly; otherwise vllm picks its default.
+TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-}"
+TP_ARGS=()
+if [ -n "$TENSOR_PARALLEL_SIZE" ]; then
+  TP_ARGS=(--tensor-parallel-size "$TENSOR_PARALLEL_SIZE")
 fi
 
 # Optional: Hugging Face cache path
@@ -58,10 +58,11 @@ fi
 # For tool calling, run with ENABLE_TOOL_CALLING=1 and set TOOL_CALL_PARSER
 # to the parser recommended by your model/chat template. Set CHAT_TEMPLATE
 # only when your model needs an explicit tool-use template.
+# Any script arguments are forwarded verbatim to `vllm serve`.
 echo "Starting vLLM on ${HOST}:${PORT}"
 echo "Model: ${MODEL}"
 echo "Served model name: ${SERVED_NAME}"
-echo "Tensor parallel size: ${TENSOR_PARALLEL_SIZE}"
+echo "Tensor parallel size: ${TENSOR_PARALLEL_SIZE:-vllm default}"
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-unset}"
 vllm serve "$MODEL" \
   --max-model-len "$MAX_MODEL_LEN" \
@@ -71,4 +72,6 @@ vllm serve "$MODEL" \
   --dtype "$DTYPE" \
   --trust-remote-code \
   --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
-  "${TOOL_ARGS[@]}"
+  "${TP_ARGS[@]}" \
+  "${TOOL_ARGS[@]}" \
+  "$@"

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Model x benchmark evaluation matrix with automatic vLLM deploy/terminate cycles.
 
-For each model in the matrix: deploy a vLLM OpenAI-compatible server (via
-scripts/auto_vllm_deploy.sh), wait until it accepts requests, run every evaluation
+For each model in the matrix: deploy a vLLM OpenAI-compatible server (via the
+top-level vllm_deploy.sh, run in the background and configured through its
+environment variables), wait until it accepts requests, run every evaluation
 configured for that model against it, then terminate the server (and wait for the
 GPU to drain) before deploying the next model. One GPU, one model at a time.
 
@@ -49,11 +50,14 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = REPO_ROOT / "scripts"
+VLLM_DEPLOY_SH = REPO_ROOT / "vllm_deploy.sh"
 
 STANDARD_EVALS = [
     "realbench-pure",
@@ -118,7 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mage-python", default=str(Path.home() / "venv-mage" / "bin" / "python"),
                         help="Python with MAGE deps (llama-index etc.) for mage-verilog-eval.")
     parser.add_argument("--vllm-venv", default=str(Path.home() / "venv-verilog"),
-                        help="Venv containing vllm, passed to auto_vllm_deploy.sh.")
+                        help="Venv containing vllm; its bin/ is prepended to PATH for vllm_deploy.sh.")
     parser.add_argument("--port-start", type=int, default=8100)
     parser.add_argument("--deploy-timeout-s", type=int, default=1800)
     parser.add_argument("--gpu-idle-mb", type=int, default=3000,
@@ -188,43 +192,71 @@ class ServerHandle:
             return None
 
 
+def wait_for_server(handle: ServerHandle, proc: subprocess.Popen, timeout_s: int) -> None:
+    """Poll /v1/models until the server responds, the process dies, or we time out."""
+    url = f"{handle.base_url}/models"
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(f"vLLM exited early with rc={proc.returncode}")
+        try:
+            with urllib.request.urlopen(url, timeout=5) as response:
+                json.loads(response.read().decode("utf-8"))
+            return
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+            time.sleep(5)
+    raise RuntimeError(f"vLLM did not become ready within {timeout_s}s")
+
+
 def deploy_model(entry: Dict[str, Any], args: argparse.Namespace, model_dir: Path) -> ServerHandle:
-    """Start vLLM for this model via auto_vllm_deploy.sh (blocks until /v1/models responds)."""
+    """Start vLLM for this model via vllm_deploy.sh (blocks until /v1/models responds)."""
     port = find_free_port(args.port_start)
     log_dir = model_dir / "vllm"
     log_dir.mkdir(parents=True, exist_ok=True)
     handle = ServerHandle(entry, port, log_dir)
-    command = [
-        "bash", str(SCRIPTS / "auto_vllm_deploy.sh"),
-        "--model", entry["model"],
-        "--served-name", entry["served_name"],
-        "--port", str(port),
-        "--log-dir", str(log_dir),
-        "--wait-timeout-s", str(args.deploy_timeout_s),
-    ]
-    if args.vllm_venv and Path(args.vllm_venv, "bin", "activate").exists():
-        command += ["--venv", args.vllm_venv]
-    if not entry.get("tool_calling", False):
-        command += ["--no-tool-calling"]
-    for extra in entry.get("vllm_extra_args", []):
-        command += ["--extra-arg", extra]
+
     env = dict(os.environ)
-    env["MAX_MODEL_LEN"] = str(entry.get("max_model_len", 32768))
+    env.update({
+        "MODEL": entry["model"],
+        "SERVED_NAME": entry["served_name"],
+        "HOST": "127.0.0.1",
+        "PORT": str(port),
+        "MAX_MODEL_LEN": str(entry.get("max_model_len", 32768)),
+        "ENABLE_TOOL_CALLING": "1" if entry.get("tool_calling", False) else "0",
+    })
     if entry.get("gpu_memory_utilization"):
         env["GPU_MEMORY_UTILIZATION"] = str(entry["gpu_memory_utilization"])
-    deploy_log = model_dir / "logs" / "deploy.log"
-    deploy_log.parent.mkdir(parents=True, exist_ok=True)
+    if entry.get("tensor_parallel_size"):
+        env["TENSOR_PARALLEL_SIZE"] = str(entry["tensor_parallel_size"])
+    venv_bin = Path(args.vllm_venv, "bin") if args.vllm_venv else None
+    if venv_bin and venv_bin.is_dir():
+        env["PATH"] = f"{venv_bin}:{env.get('PATH', '')}"
+
+    command = ["bash", str(VLLM_DEPLOY_SH), *entry.get("vllm_extra_args", [])]
+    server_log = log_dir / f"vllm-{port}.log"
     print(f"[matrix] deploying {entry['name']} ({entry['model']}) on port {port} ...")
-    with deploy_log.open("a", encoding="utf-8") as log_handle:
-        completed = subprocess.run(
+    with server_log.open("a", encoding="utf-8") as log_handle:
+        proc = subprocess.Popen(
             command, cwd=REPO_ROOT, env=env, stdout=log_handle, stderr=subprocess.STDOUT,
-            timeout=args.deploy_timeout_s + 300, check=False,
+            start_new_session=True,
         )
-    if completed.returncode != 0:
-        tail = deploy_log.read_text(encoding="utf-8", errors="ignore")[-3000:]
-        raise RuntimeError(f"vLLM deploy failed for {entry['name']} (see {deploy_log}):\n{tail}")
+    handle.pid_file.write_text(str(proc.pid), encoding="utf-8")
+    try:
+        wait_for_server(handle, proc, args.deploy_timeout_s)
+    except RuntimeError as exc:
+        stop_server(handle, args)
+        tail = server_log.read_text(encoding="utf-8", errors="ignore")[-3000:]
+        raise RuntimeError(f"vLLM deploy failed for {entry['name']} (see {server_log}): {exc}\n{tail}") from exc
     print(f"[matrix] {entry['name']} ready at {handle.base_url}")
     return handle
+
+
+def _signal_server(pid: int, sig: int) -> None:
+    """Signal the server's process group (vllm is a child of the deploy shell)."""
+    try:
+        os.killpg(pid, sig)
+    except ProcessLookupError:
+        os.kill(pid, sig)
 
 
 def stop_server(handle: ServerHandle, args: argparse.Namespace) -> None:
@@ -234,13 +266,13 @@ def stop_server(handle: ServerHandle, args: argparse.Namespace) -> None:
         print(f"[matrix] stopping vLLM pid {pid} (port {handle.port})")
         for sig, grace_s in ((signal.SIGTERM, 60), (signal.SIGKILL, 30)):
             try:
-                os.kill(pid, sig)
+                _signal_server(pid, sig)
             except ProcessLookupError:
                 break
             deadline = time.time() + grace_s
             while time.time() < deadline:
                 try:
-                    os.kill(pid, 0)
+                    _signal_server(pid, 0)
                 except ProcessLookupError:
                     break
                 time.sleep(2)
