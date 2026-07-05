@@ -60,8 +60,8 @@ def main() -> None:
                         ensure_ascii=False,
                     )
                     + "\n"
-            )
-            written += 1
+                )
+                written += 1
 
     print(f"wrote {written} samples to {output_path}")
 
