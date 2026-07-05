@@ -77,6 +77,8 @@ STANDARD_EVALS = [
     "verilog-eval-pure",
     "verilog-eval-router",
 ]
+MAGE_EVALS = ["mage-realbench", "mage-rtllm", "mage-verilog-eval"]
+ALL_EVALS = STANDARD_EVALS + MAGE_EVALS
 
 DEFAULT_MATRIX: List[Dict[str, Any]] = [
     {
@@ -119,7 +121,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", default="runs/model_eval_matrix")
     parser.add_argument("--config", help="JSON file with a custom matrix (list of model entries).")
     parser.add_argument("--models", action="append", default=[], help="Only run these model names (repeatable).")
-    parser.add_argument("--evals", action="append", default=[], help="Only run these eval names (repeatable).")
+    parser.add_argument(
+        "--evals",
+        action="append",
+        default=[],
+        help="Run exactly these eval names for the selected models (repeatable). Explicit --evals "
+        "overrides each entry's default eval list, so e.g. mage-realbench can be run for a model "
+        "whose defaults do not include the MAGE arms.",
+    )
     parser.add_argument("--samples", type=int, default=1, help="Samples per task for the benchmark runners.")
     parser.add_argument("--concurrency", type=int, default=4, help="Worker threads for the benchmark runners.")
     parser.add_argument("--decider", choices=["keyword", "llm"], default="keyword", help="Tier-0 decider for router arms.")
@@ -595,8 +604,13 @@ def load_matrix(args: argparse.Namespace) -> List[Dict[str, Any]]:
             raise ValueError(f"unknown model name(s): {sorted(missing)}")
     if args.evals:
         wanted_evals = set(args.evals)
+        unknown = wanted_evals - set(ALL_EVALS)
+        if unknown:
+            raise ValueError(f"unknown eval name(s): {sorted(unknown)}; known: {ALL_EVALS}")
+        # Explicit --evals is authoritative for the selected models (it may add
+        # arms missing from an entry's default list, e.g. MAGE on codev-r1).
         for entry in matrix:
-            entry["evals"] = [name for name in entry["evals"] if name in wanted_evals]
+            entry["evals"] = [name for name in ALL_EVALS if name in wanted_evals]
         matrix = [entry for entry in matrix if entry["evals"]]
     return matrix
 

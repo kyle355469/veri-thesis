@@ -43,8 +43,11 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -116,8 +119,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url", help="OpenAI-compatible base URL. Defaults to VLLM_BASE_URL.")
     parser.add_argument("--model", help="Served model name. Defaults to VLLM_MODEL.")
     parser.add_argument("--api-key", help="API key. Defaults to VLLM_API_KEY or EMPTY.")
-    parser.add_argument("--context-window", type=int, default=32768)
+    parser.add_argument("--context-window", type=int, default=32768,
+                        help="Fallback context window; the server-reported max_model_len wins when available.")
     parser.add_argument("--max-token", type=int, default=8192)
+    parser.add_argument("--min-completion-tokens", type=int, default=512,
+                        help="Minimum completion room a prompt must leave inside the context window; "
+                        "requests below it raise a context skip (task recorded as context_skipped).")
     parser.add_argument("--temperature", type=float, default=0.85)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--llm-timeout-s", type=int, default=2400)
@@ -131,13 +138,237 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# --------------------------------------------------------------------------- #
+# Served-model compatibility: reasoning models + context guard
+#
+# Self-contained (stdlib) mirror of rag_rtl/context_guard.py + the reasoning-
+# aware parsing in rag_rtl/llm.py, because this script runs inside the MAGE
+# venv without the veri-thesis packages. Three problems it solves for served
+# models like CodeV-R1 and SiliconMind-V1:
+#
+# 1. MAGE's agents parse replies with a bare json.loads(); a <think> trace or a
+#    ```json fence in the content breaks every parse. The wrapped LLM strips
+#    the reasoning (CodeV-R1 pairs <think>...</think>; SiliconMind-V1's
+#    Qwen3-Thinking template injects the opening tag so only a bare closing
+#    </think> appears) and unwraps a fenced json/xml body before MAGE sees it.
+# 2. vLLM rejects requests where prompt + max_tokens exceeds max_model_len; the
+#    wrapper clamps max_tokens per request (prompt measured via the server's
+#    /tokenize, chars/4 fallback) and raises MageContextSkip when the prompt
+#    alone leaves no room, so the task is skipped instead of erroring opaquely.
+#    Disable with VLLM_CONTEXT_GUARD=0.
+# 3. MAGE's TokenCounter calls tiktoken.encoding_for_model(<served name>),
+#    which raises KeyError for names tiktoken does not know (codev-r1,
+#    siliconmind-v1); patch_tiktoken_fallback() falls back to o200k_base --
+#    those counts are telemetry only.
+# --------------------------------------------------------------------------- #
+
+CONTEXT_MARGIN_TOKENS = 128
+GUARD_CHARS_PER_TOKEN = 4
+GUARD_PER_MESSAGE_OVERHEAD = 8
+THINK_OPEN_RE = re.compile(r"<think\b[^>]*>", re.IGNORECASE)
+THINK_CLOSE_RE = re.compile(r"</think\s*>", re.IGNORECASE)
+JSON_FENCE_RE = re.compile(r"```(?:json|xml)(.*?)```", re.IGNORECASE | re.DOTALL)
+
+_GUARD_LOCK = threading.Lock()
+_SERVER_LIMITS: Dict[str, Optional[int]] = {}
+_TOKENIZE_SUPPORTED: Dict[str, bool] = {}
+
+
+class MageContextSkip(RuntimeError):
+    """The prompt does not fit the served context window; nothing was sent."""
+
+
+def strip_reasoning(text: str) -> str:
+    """Answer section of a reasoning-model reply (text after the last </think>);
+    a reply truncated inside an unterminated <think> yields an empty answer."""
+    closes = list(THINK_CLOSE_RE.finditer(text))
+    if closes:
+        return text[closes[-1].end():]
+    opens = list(THINK_OPEN_RE.finditer(text))
+    if opens:
+        return text[: opens[0].start()]
+    return text
+
+
+def sanitize_llm_content(content: Optional[str]) -> str:
+    """Reduce a served-model reply to what MAGE's json.loads parsers expect."""
+    text = strip_reasoning(content or "").strip()
+    fenced = list(JSON_FENCE_RE.finditer(text))
+    if fenced:
+        return fenced[-1].group(1).strip()
+    return text
+
+
+def _sanitize_chat_response(response: Any) -> Any:
+    message = getattr(response, "message", None)
+    if message is None:
+        return response
+    content = message.content
+    if not (content or "").strip():
+        # Reasoning-parser deployments leave content empty with the text in
+        # reasoning_content; recover it from the raw completion payload.
+        content = _raw_reasoning_content(response) or content
+    message.content = sanitize_llm_content(content)
+    return response
+
+
+def _raw_reasoning_content(response: Any) -> Optional[str]:
+    raw = getattr(response, "raw", None)
+    try:
+        if isinstance(raw, dict):
+            message = raw["choices"][0]["message"]
+            return message.get("reasoning_content") or message.get("reasoning")
+        message = raw.choices[0].message
+        return getattr(message, "reasoning_content", None) or getattr(message, "reasoning", None)
+    except (AttributeError, KeyError, IndexError, TypeError):
+        return None
+
+
+def _server_max_model_len(base_url: str, api_key: str) -> Optional[int]:
+    with _GUARD_LOCK:
+        if base_url in _SERVER_LIMITS:
+            return _SERVER_LIMITS[base_url]
+    limit: Optional[int] = None
+    try:
+        request = urllib.request.Request(
+            f"{base_url.rstrip('/')}/models", headers={"Authorization": f"Bearer {api_key}"}
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            body = json.loads(response.read().decode("utf-8"))
+        lengths = [
+            int(item["max_model_len"])
+            for item in body.get("data", [])
+            if isinstance(item, dict) and item.get("max_model_len")
+        ]
+        if lengths:
+            limit = min(lengths)
+    except (urllib.error.URLError, OSError, ValueError, KeyError, json.JSONDecodeError):
+        limit = None
+    with _GUARD_LOCK:
+        _SERVER_LIMITS[base_url] = limit
+    return limit
+
+
+def _count_prompt_tokens(base_url: str, api_key: str, model: str, chat_dicts: List[Dict[str, str]]) -> int:
+    """Prompt tokens via the server's /tokenize (root path); chars/4 fallback."""
+    with _GUARD_LOCK:
+        supported = _TOKENIZE_SUPPORTED.get(base_url, True)
+    if supported:
+        root = re.sub(r"/v1/?$", "", base_url.rstrip("/"))
+        joined = "\n".join(item["content"] for item in chat_dicts)
+        for payload in (
+            {"model": model, "messages": chat_dicts, "add_generation_prompt": True},
+            {"model": model, "prompt": joined},
+        ):
+            try:
+                request = urllib.request.Request(
+                    f"{root}/tokenize",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    body = json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError:
+                continue
+            except (urllib.error.URLError, OSError, json.JSONDecodeError):
+                break
+            if isinstance(body.get("count"), int):
+                return body["count"]
+        with _GUARD_LOCK:
+            _TOKENIZE_SUPPORTED[base_url] = False
+    total_chars = sum(len(item["content"]) for item in chat_dicts)
+    return total_chars // GUARD_CHARS_PER_TOKEN + GUARD_PER_MESSAGE_OVERHEAD * max(len(chat_dicts), 1)
+
+
+def _fit_context(
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: Any,
+    configured_window: int,
+    configured_max_tokens: int,
+    min_completion_tokens: int,
+    kwargs: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Clamp this request's max_tokens into the served window (or raise MageContextSkip)."""
+    if os.getenv("VLLM_CONTEXT_GUARD", "1") == "0":
+        return kwargs
+    limit = _server_max_model_len(base_url, api_key) or configured_window
+    if not limit:
+        return kwargs
+    chat_dicts = [
+        {"role": getattr(m.role, "value", str(m.role)), "content": str(m.content or "")}
+        for m in messages
+    ]
+    prompt_tokens = _count_prompt_tokens(base_url, api_key, model, chat_dicts)
+    available = limit - prompt_tokens - CONTEXT_MARGIN_TOKENS
+    if available < min_completion_tokens:
+        raise MageContextSkip(
+            f"prompt needs ~{prompt_tokens} tokens but the served context window is {limit}; "
+            f"fewer than {min_completion_tokens} tokens would remain for the completion"
+        )
+    requested = kwargs.get("max_tokens") or configured_max_tokens
+    if requested and requested > available:
+        kwargs = dict(kwargs)
+        kwargs["max_tokens"] = available
+    return kwargs
+
+
+def patch_tiktoken_fallback() -> None:
+    """Make tiktoken.encoding_for_model tolerate served names it does not know
+    (codev-r1, siliconmind-v1, ...) so MAGE's TokenCounter can be constructed;
+    the fallback encoding only skews MAGE's telemetry counts, nothing else."""
+    import tiktoken
+
+    original = tiktoken.encoding_for_model
+
+    def encoding_for_model(model_name: str):
+        try:
+            return original(model_name)
+        except KeyError:
+            print(f"[mage] tiktoken does not know {model_name!r}; using o200k_base for token telemetry")
+            return tiktoken.get_encoding("o200k_base")
+
+    tiktoken.encoding_for_model = encoding_for_model
+
+
 def make_llm(args: argparse.Namespace) -> Any:
     base_url = args.base_url or os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
     model = args.model or os.getenv("VLLM_MODEL", "siliconmind-server")
     api_key = args.api_key or os.getenv("VLLM_API_KEY", "EMPTY")
     from llama_index.llms.openai_like import OpenAILike
 
-    return OpenAILike(
+    class GuardedOpenAILike(OpenAILike):
+        """OpenAILike with the context guard and reasoning-model sanitizing.
+
+        Every MAGE agent call funnels through TokenCounter.count_chat/achat ->
+        llm.chat/achat, so wrapping here covers the whole TopAgent loop.
+        """
+
+        def _get_model_kwargs(self, **kwargs: Any) -> Dict[str, Any]:
+            # The base class lets self.max_tokens overwrite a per-call kwarg;
+            # the guard's per-request clamp must win instead.
+            out = super()._get_model_kwargs(**kwargs)
+            if "max_tokens" in kwargs:
+                out["max_tokens"] = kwargs["max_tokens"]
+            return out
+
+        def chat(self, messages: Any, **kwargs: Any) -> Any:
+            kwargs = _fit_context(
+                base_url, api_key, model, messages,
+                args.context_window, args.max_token, args.min_completion_tokens, kwargs,
+            )
+            return _sanitize_chat_response(super().chat(messages, **kwargs))
+
+        async def achat(self, messages: Any, **kwargs: Any) -> Any:
+            kwargs = _fit_context(
+                base_url, api_key, model, messages,
+                args.context_window, args.max_token, args.min_completion_tokens, kwargs,
+            )
+            return _sanitize_chat_response(await super().achat(messages, **kwargs))
+
+    return GuardedOpenAILike(
         model=model,
         api_base=base_url,
         api_key=api_key,
@@ -492,6 +723,11 @@ def main(argv: Optional[list] = None) -> None:
         raise FileNotFoundError(f"MAGE package not found under {mage_src}")
     sys.path.insert(0, str(mage_src))
 
+    # Must happen before TopAgent is constructed: its TokenCounter calls
+    # tiktoken.encoding_for_model(<served name>) which raises KeyError for
+    # names tiktoken does not know (codev-r1, siliconmind-v1).
+    patch_tiktoken_fallback()
+
     from mage.agent import TopAgent
     from mage.gen_config import set_exp_setting
 
@@ -542,6 +778,7 @@ def main(argv: Optional[list] = None) -> None:
             print(f"[mage] ({index:03d}/{len(tasks):03d}) round {round_index} task {task.task_id}")
             t0 = time.monotonic()
             error: Optional[str] = None
+            context_skipped = False
             try:
                 agent.run(
                     benchmark_type_name=benchmark_type_name,
@@ -550,6 +787,10 @@ def main(argv: Optional[list] = None) -> None:
                     golden_tb_path=task.golden_tb_path,
                     golden_rtl_blackbox_path=task.golden_rtl_blackbox_path,
                 )
+            except MageContextSkip as exc:
+                context_skipped = True
+                error = f"context window exceeded, task skipped: {exc}"
+                print(f"[mage] {task.task_id}: {error}")
             except Exception as exc:  # noqa: BLE001 - keep the benchmark moving.
                 error = f"{exc}\n{traceback.format_exc()[-2000:]}"
                 print(f"[mage] {task.task_id} agent error: {exc}", file=sys.stderr)
@@ -566,6 +807,7 @@ def main(argv: Optional[list] = None) -> None:
                 "in_tokens": token_count.in_token_cnt,
                 "out_tokens": token_count.out_token_cnt,
                 "agent_error": error,
+                "context_skipped": context_skipped,
                 "sim_log_tail": str(sim_log)[-2000:],
             }
             record_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
@@ -577,6 +819,7 @@ def main(argv: Optional[list] = None) -> None:
             "pass_cnt": pass_count,
             "total_cnt": len(per_run),
             "pass_rate": (pass_count / len(per_run)) if per_run else None,
+            "context_skipped_cnt": sum(1 for entry in per_run.values() if entry.get("context_skipped")),
             "total_run_time_s": round(time.monotonic() - round_start, 2),
         }
         record_path.write_text(json.dumps(record, indent=2), encoding="utf-8")
