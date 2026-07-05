@@ -11,8 +11,24 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from .context_guard import (
+    ContextLengthError,
+    DEFAULT_MARGIN_TOKENS,
+    DEFAULT_MIN_COMPLETION_TOKENS,
+    clamp_max_tokens,
+)
 from .json_utils import preview_text
 from .siliconmind_utils import parse_code as parse_siliconmind_code, wrap_code
+
+__all__ = [
+    "ContextLengthError",
+    "StubLlmClient",
+    "VllmClient",
+    "extract_code",
+    "get_request_log",
+    "reset_request_log",
+    "split_reasoning",
+]
 
 # Per-thread log of every LLM serve request (start time + latency + tokens).
 # Thread-local so concurrent samples don't mix, and module-level so it captures
@@ -73,6 +89,13 @@ class VllmClient:
     model: str = "siliconmind-server"
     timeout_s: int = 2400
     api_key: str = "EMPTY"
+    # Context guard: fit every request into the served window before sending.
+    # max_model_len None/0 means "read it from the server's /v1/models"; a
+    # prompt leaving less than min_completion_tokens raises ContextLengthError
+    # (callers skip that task), otherwise max_tokens is clamped to what fits.
+    max_model_len: Optional[int] = None
+    min_completion_tokens: int = DEFAULT_MIN_COMPLETION_TOKENS
+    context_margin_tokens: int = DEFAULT_MARGIN_TOKENS
 
     @staticmethod
     def reset_request_log() -> None:
@@ -239,6 +262,17 @@ class VllmClient:
         return message.get("content") or ""
 
     def _post_chat_completion(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        # Raises ContextLengthError (nothing sent, nothing logged) when the
+        # prompt alone overflows the window; otherwise clamps max_tokens so
+        # vLLM never rejects the request for prompt + max_tokens overflow.
+        clamp_max_tokens(
+            payload,
+            base_url=self.base_url,
+            api_key=self.api_key,
+            max_model_len=self.max_model_len,
+            min_completion_tokens=self.min_completion_tokens,
+            margin_tokens=self.context_margin_tokens,
+        )
         data = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
             f"{self.base_url.rstrip('/')}/chat/completions",
@@ -346,12 +380,75 @@ class StubLlmClient:
         return self.complete(prompt, temperature=temperature, max_tokens=max_tokens)
 
 
+THINK_OPEN_RE = re.compile(r"<think\b[^>]*>", re.IGNORECASE)
+THINK_CLOSE_RE = re.compile(r"</think\s*>", re.IGNORECASE)
+FENCE_OPEN_RE = re.compile(
+    r"^[ \t]*```[ \t]*(?:verilog|systemverilog|sv)?[ \t]*\r?\n", re.IGNORECASE | re.MULTILINE
+)
+
+
+def split_reasoning(model_text: str) -> tuple[str, str]:
+    """Split a reasoning-model reply into (reasoning, answer).
+
+    Handles both served formats: CodeV-R1 emits paired ``<think>...</think>``
+    blocks, while SiliconMind-V1 (Qwen3-Thinking-2507 template) has the opening
+    tag injected by the chat template, so its content starts mid-reasoning and
+    carries only a bare closing ``</think>``. The answer is everything after
+    the last closing tag; a reply truncated inside an unterminated ``<think>``
+    yields an empty answer.
+    """
+    closes = list(THINK_CLOSE_RE.finditer(model_text))
+    if closes:
+        last = closes[-1]
+        reasoning = THINK_OPEN_RE.sub("", model_text[: last.start()])
+        return reasoning, model_text[last.end() :]
+    opens = list(THINK_OPEN_RE.finditer(model_text))
+    if opens:
+        return model_text[opens[0].end() :], model_text[: opens[0].start()]
+    return "", model_text
+
+
 def extract_code(model_text: str) -> str:
-    siliconmind_code = parse_siliconmind_code(model_text)
-    if siliconmind_code:
-        return siliconmind_code
-    source = model_text.strip()
+    """Final RTL from a model reply (CodeV-R1 / SiliconMind-V1 aware).
+
+    The reasoning trace is split off first so draft code inside <think> is
+    never mistaken for the answer and prose reasoning is never returned as
+    bare HDL. Only when the answer section yields nothing (reply truncated
+    mid-reasoning) is the last fenced draft salvaged from the reasoning.
+    """
+    reasoning, answer = split_reasoning(model_text)
+    code = _extract_code_from_section(answer, allow_bare_hdl=True)
+    if code:
+        return code
+    if reasoning:
+        return _extract_code_from_section(reasoning, allow_bare_hdl=False)
+    return ""
+
+
+def _extract_code_from_section(text: str, allow_bare_hdl: bool) -> str:
+    code = parse_siliconmind_code(text)  # <answer> blocks, then last fenced block
+    if code:
+        return code
+    code = _unterminated_fenced_code(text)
+    if code:
+        return code
+    if not allow_bare_hdl:
+        return ""
+    source = text.strip()
     return source if _looks_like_hdl_source(source) else ""
+
+
+def _unterminated_fenced_code(text: str) -> str:
+    """Salvage a final code block whose closing fence was cut off (finish_reason
+    "length"); only accepted when the fenced tail actually looks like HDL."""
+    matches = list(FENCE_OPEN_RE.finditer(text))
+    if not matches:
+        return ""
+    tail = text[matches[-1].end() :]
+    if "```" in tail:
+        return ""  # closed block; the fenced parser already had its chance
+    tail = tail.strip()
+    return tail if _looks_like_hdl_source(tail) else ""
 
 
 def _looks_like_hdl_source(source: str) -> bool:
