@@ -45,6 +45,12 @@ class FakeClient:
     def reset_usage(self):
         self.reset_calls += 1
 
+    def reset_request_log(self):
+        pass
+
+    def current_requests(self):
+        return []
+
     def current_usage(self):
         return {
             "prompt_tokens": 10,

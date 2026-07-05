@@ -233,6 +233,12 @@ def make_fake_realbench(root: Path) -> None:
 
 
 class FakeClient:
+    def reset_request_log(self):
+        pass
+
+    def current_requests(self):
+        return []
+
     def chat(self, messages, temperature, max_tokens):
         return {
             "content": "```verilog\nmodule aes_sbox(input [7:0] a, output [7:0] b); assign b = a; endmodule\n```",

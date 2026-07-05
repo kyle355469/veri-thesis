@@ -32,7 +32,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from rag_rtl.json_utils import dumps_json
-from rag_rtl.llm import VllmClient, extract_code
+from rag_rtl.llm import ContextLengthError, VllmClient, extract_code
 
 from scripts.run_agentic_plan_legacy_realbench import (
     CatalogBundle,
@@ -112,6 +112,20 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help="Optional cap for the RealBench problem text before sending it to the model; 0 means no cap.",
+    )
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=0,
+        help="Served context window for the context guard; 0 reads it from the server's /v1/models. "
+        "Prompts that leave less than --min-completion-tokens of room are skipped (recorded as "
+        "context_skipped), and max_tokens is clamped per request so vLLM never rejects for overflow.",
+    )
+    parser.add_argument(
+        "--min-completion-tokens",
+        type=int,
+        default=1024,
+        help="Minimum completion room a prompt must leave inside the context window to be attempted.",
     )
 
     parser.add_argument("--make-bin", default="make")
@@ -194,6 +208,8 @@ def make_client(args: argparse.Namespace) -> VllmClient:
         model=args.model or os.getenv("VLLM_MODEL", "siliconmind-server"),
         api_key=args.api_key or os.getenv("VLLM_API_KEY", "EMPTY"),
         timeout_s=args.llm_timeout_s,
+        max_model_len=args.max_model_len or None,
+        min_completion_tokens=args.min_completion_tokens,
     )
 
 
@@ -336,6 +352,7 @@ def run_one_direct(
     generation_error: Optional[str] = None
     reused_existing = False
     repair_result: Any = None
+    context_skipped = False
 
     # Start this sample's serve-request log fresh (thread-local; this sample owns
     # its worker thread), then snapshot it into the record below.
@@ -369,6 +386,12 @@ def run_one_direct(
                 code_path.write_text(code, encoding="utf-8")
             else:
                 generation_error = "model response did not contain parsable RTL"
+        except ContextLengthError as exc:
+            # The prompt does not fit the served context window: the task is
+            # skipped up front (nothing was sent) and marked so the summary can
+            # separate capability failures from context-window exclusions.
+            context_skipped = True
+            generation_error = f"context window exceeded, task skipped: {exc}"
         except Exception as exc:  # noqa: BLE001 - keep the benchmark moving.
             generation_error = f"{exc}\n{traceback.format_exc()[-4000:]}"
 
@@ -391,6 +414,7 @@ def run_one_direct(
         repair_result=repair_result,
         request_log=client.current_requests(),
         args=args,
+        context_skipped=context_skipped,
     )
     report.write_text(dumps_json(record, indent=2), encoding="utf-8")
     return record
@@ -411,6 +435,7 @@ def build_record(
     repair_result: Any = None,
     request_log: Optional[Sequence[Dict[str, Any]]] = None,
     args: Optional[argparse.Namespace] = None,
+    context_skipped: bool = False,
 ) -> Dict[str, Any]:
     task = item.task
     repair_on = bool(args is not None and repair_enabled(args))
@@ -432,6 +457,7 @@ def build_record(
         "generated": generated,
         "reused_existing": reused_existing,
         "generation_error": generation_error,
+        "context_skipped": context_skipped,
         "direct_repair": repair_on,
         "direct_repair_attempts": repair_result.repair_attempts if repair_result else None,
         "direct_functional_repair": bool(args.functional_repair) if args is not None else False,
@@ -481,6 +507,7 @@ def summarize(records: Sequence[Dict[str, Any]], tasks: Sequence[RealBenchTask],
         "num_records": total,
         "samples_per_task": max((int(record["sample"]) for record in records), default=0),
         "generated": sum(1 for record in records if record.get("generated")),
+        "context_skipped": sum(1 for record in records if record.get("context_skipped")),
         "syntax": syntax,
         "function": function,
         "passed": passed,
@@ -550,7 +577,7 @@ def run_realbench_direct(args: argparse.Namespace) -> Dict[str, Any]:
                 records.append(record)
                 partial.write(dumps_json(record) + "\n")
                 partial.flush()
-                status = "PASS" if record["passed"] else "FAIL"
+                status = "PASS" if record["passed"] else ("SKIP" if record.get("context_skipped") else "FAIL")
                 print(
                     f"[realbench-direct] {status} {record['task_level']}/{record['system']}/{record['task']} "
                     f"sample {int(record['sample']):02d} syntax={record['syntax']} function={record['function']}"

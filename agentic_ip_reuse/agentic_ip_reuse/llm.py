@@ -10,6 +10,15 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
+# Context guard shared with the legacy pipeline: pre-checks that the prompt
+# fits the served context window and clamps max_tokens so vLLM never rejects
+# for prompt + max_tokens overflow. Soft import -- this package also runs
+# standalone without the veri-thesis repo root on sys.path.
+try:
+    from rag_rtl.context_guard import clamp_max_tokens as _clamp_max_tokens
+except ImportError:  # pragma: no cover - standalone install without rag_rtl
+    _clamp_max_tokens = None
+
 # Per-thread log of every LLM serve request (start time + latency + tokens).
 # Thread-local so concurrent samples don't mix, and module-level so it captures
 # every VllmClient instance created during a sample. Reset per sample, then read.
@@ -96,6 +105,10 @@ class VllmClient:
         return message
 
     def _post_chat_completion(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if _clamp_max_tokens is not None:
+            # Raises rag_rtl.context_guard.ContextLengthError (a RuntimeError,
+            # nothing sent) when the prompt alone overflows the served window.
+            _clamp_max_tokens(payload, base_url=self.base_url, api_key=self.api_key)
         data = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
             f"{self.base_url.rstrip('/')}/chat/completions",

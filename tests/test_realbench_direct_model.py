@@ -40,6 +40,12 @@ class FakeClient:
     def __init__(self):
         self.messages = []
 
+    def reset_request_log(self):
+        pass
+
+    def current_requests(self):
+        return []
+
     def chat(self, messages, temperature, max_tokens):
         self.messages.append(messages)
         return {

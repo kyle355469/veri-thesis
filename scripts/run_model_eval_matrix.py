@@ -32,11 +32,21 @@ Layout: <output-dir>/<model>/<eval>/... (results plus that eval's <eval>.log) an
 every deployment and eval outcome; --resume skips evals whose summary.json exists
 (and forwards --resume to the underlying runners).
 
+With ``--base-url`` the deploy/terminate cycle is skipped entirely: evals run
+against an already-running OpenAI-compatible server that you deployed yourself.
+The served model name and max_model_len are read from that server's /v1/models
+(and the reported window overrides the matrix entry's, so all token/prompt
+budgets are derived from the real deployment). Only matrix entries actually
+served at that URL run; pick one with --models.
+
 Usage::
 
     python scripts/run_model_eval_matrix.py --samples 5 --concurrency 8
     python scripts/run_model_eval_matrix.py --models codev-r1 --evals rtllm-router --dry-run
     python scripts/run_model_eval_matrix.py --config my_matrix.json --resume
+    # server deployed by hand; run one model's pure arm against it:
+    python scripts/run_model_eval_matrix.py --base-url http://127.0.0.1:8000/v1 \
+        --models codev-r1 --evals realbench-pure
 """
 
 from __future__ import annotations
@@ -115,6 +125,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--decider", choices=["keyword", "llm"], default="keyword", help="Tier-0 decider for router arms.")
     parser.add_argument("--resume", action="store_true", help="Skip evals with an existing summary.json; forward --resume to runners.")
     parser.add_argument("--dry-run", action="store_true", help="Print deployments and commands without running anything.")
+    parser.add_argument(
+        "--base-url",
+        help="Use an already-running OpenAI-compatible server at this URL (e.g. "
+        "http://127.0.0.1:8000/v1) instead of deploying vLLM per model. Deploy/terminate and GPU "
+        "drain are skipped; the served name and max_model_len are read from its /v1/models.",
+    )
     parser.add_argument("--stop-on-error", action="store_true", help="Abort the matrix on the first failed eval (default: continue).")
 
     parser.add_argument("--python", default=str("python3"),
@@ -192,6 +208,31 @@ class ServerHandle:
             return None
 
 
+class ExternalServerHandle:
+    """A server the user deployed themselves: nothing to start or stop."""
+
+    def __init__(self, base_url: str):
+        self.base_url = base_url.rstrip("/")
+
+
+def probe_external_server(base_url: str, timeout_s: int = 30) -> Dict[str, Optional[int]]:
+    """{served model id: max_model_len or None} from the server's /v1/models."""
+    url = f"{base_url.rstrip('/')}/models"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_s) as response:
+            body = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"external server at {base_url} is not answering /v1/models: {exc}") from exc
+    models: Dict[str, Optional[int]] = {}
+    for item in body.get("data", []):
+        if isinstance(item, dict) and item.get("id"):
+            length = item.get("max_model_len")
+            models[str(item["id"])] = int(length) if length else None
+    if not models:
+        raise RuntimeError(f"external server at {base_url} reports no served models")
+    return models
+
+
 def wait_for_server(handle: ServerHandle, proc: subprocess.Popen, timeout_s: int) -> None:
     """Poll /v1/models until the server responds, the process dies, or we time out."""
     url = f"{handle.base_url}/models"
@@ -206,6 +247,38 @@ def wait_for_server(handle: ServerHandle, proc: subprocess.Popen, timeout_s: int
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
             time.sleep(5)
     raise RuntimeError(f"vLLM did not become ready within {timeout_s}s")
+
+
+def attach_external_server(
+    entry: Dict[str, Any], base_url: str, models: Dict[str, Optional[int]]
+) -> ExternalServerHandle:
+    """Bind a matrix entry to the user-deployed server instead of deploying vLLM.
+
+    The entry's served_name must be on the server (with a single served model a
+    mismatched name is adopted with a notice), and the server-reported
+    max_model_len replaces the entry's so every token/prompt budget is derived
+    from the real deployment.
+    """
+    served = entry["served_name"]
+    if served not in models:
+        if len(models) == 1:
+            actual = next(iter(models))
+            print(f"[matrix] {entry['name']}: served name {served!r} not on the external server; using {actual!r}")
+            entry["served_name"] = actual
+        else:
+            raise RuntimeError(
+                f"{entry['name']} (served_name={served!r}) is not served at {base_url}; "
+                f"available: {sorted(models)}"
+            )
+    reported = models.get(entry["served_name"])
+    if reported:
+        if reported != entry.get("max_model_len"):
+            print(
+                f"[matrix] {entry['name']}: using served max_model_len={reported} "
+                f"(matrix entry said {entry.get('max_model_len')})"
+            )
+        entry["max_model_len"] = reported
+    return ExternalServerHandle(base_url)
 
 
 def deploy_model(entry: Dict[str, Any], args: argparse.Namespace, model_dir: Path) -> ServerHandle:
@@ -545,13 +618,24 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     print(f"[matrix] {len(matrix)} model(s): " + ", ".join(f"{m['name']}({len(m['evals'])} evals)" for m in matrix))
     if args.dry_run:
         for entry in matrix:
-            fake = ServerHandle(entry, args.port_start, output_dir / entry["name"] / "vllm")
-            print(f"\n[dry-run] deploy: {entry['model']} served as {entry['served_name']}")
+            if args.base_url:
+                fake: Any = ExternalServerHandle(args.base_url)
+                print(f"\n[dry-run] external server: {args.base_url} (expects served name {entry['served_name']})")
+            else:
+                fake = ServerHandle(entry, args.port_start, output_dir / entry["name"] / "vllm")
+                print(f"\n[dry-run] deploy: {entry['model']} served as {entry['served_name']}")
             for eval_name in entry["evals"]:
                 run_dir = eval_run_dir(output_dir / entry["name"], eval_name)
                 print("  " + " ".join(build_eval_command(eval_name, entry, args, run_dir, fake.base_url)))
-            print(f"[dry-run] terminate server for {entry['name']}")
+            if not args.base_url:
+                print(f"[dry-run] terminate server for {entry['name']}")
         return
+
+    external_models: Optional[Dict[str, Optional[int]]] = None
+    if args.base_url:
+        external_models = probe_external_server(args.base_url)
+        served = ", ".join(f"{name} (ctx={length or '?'})" for name, length in external_models.items())
+        print(f"[matrix] external server {args.base_url} serves: {served}")
 
     for entry in matrix:
         model_dir = output_dir / entry["name"]
@@ -569,7 +653,10 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             continue
 
         try:
-            handle = deploy_model(entry, args, model_dir)
+            if external_models is not None:
+                handle: Any = attach_external_server(entry, args.base_url, external_models)
+            else:
+                handle = deploy_model(entry, args, model_dir)
         except (RuntimeError, subprocess.TimeoutExpired) as exc:
             print(f"[matrix] ERROR deploying {entry['name']}: {exc}", file=sys.stderr)
             model_record["deploy_error"] = str(exc)[-2000:]
@@ -587,7 +674,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
                 if args.stop_on_error and record.get("returncode") not in (None, 0):
                     raise RuntimeError(f"eval {eval_name} failed for {entry['name']}")
         finally:
-            stop_server(handle, args)
+            if external_models is None:
+                stop_server(handle, args)
 
     matrix_summary_path.write_text(json.dumps(matrix_summary, indent=2), encoding="utf-8")
     print(f"\n[matrix] done. Summary: {matrix_summary_path}")
