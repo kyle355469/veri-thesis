@@ -3,20 +3,29 @@
 \chapter{Cascade Routing between Direct and Pipeline Flows}
 \label{ch:04}
 
-The pipeline of Chapter~\ref{ch:03} is not uniformly better than simply
-asking the model for the module. On a substantial class of tasks it is
-\emph{worse}: its planning and reuse scaffolding invents structure that a
-self-contained module does not need, and derails a generation that a bare
-prompt would have gotten right. This chapter presents the second
-contribution of the thesis: a per-task \emph{cascade router} that predicts,
-before spending pipeline-scale compute, which of two flows a task should
-take --- the full agentic pipeline, or a cheap \emph{direct} single-shot
-generation. Section~\ref{sec:router-motivation} establishes why the two
-flows are complementary; Section~\ref{sec:router-classes} defines the task
-classes and the oracle labels used to evaluate routing;
-Section~\ref{sec:router-design} describes the two-tier cascade; and
-Section~\ref{sec:router-metrics} defines the routing-specific metrics used
-in Section~\ref{sec:results-routing}.
+Comparing the pipeline of Chapter~\ref{ch:03} with direct generation
+task by task, we notice that the two implementations reach
+\emph{different solution spaces}: each solves a set of tasks the other
+does not. Diving into that solution variety shows a clean pattern.
+Direct generation has the better ability on algorithm and FSM design
+--- the model writes a self-contained datapath or state machine as one
+coherent piece --- while pipeline-plan generation raises accuracy
+substantially on integration and routing problems, where the work is
+arranging and wiring existing modules. This division matches the purpose
+of this thesis exactly: IP-reuse problems mostly need several existing
+modules arranged and integrated correctly, which is precisely where the
+plan pays, while the residual algorithmic tasks are best served by
+letting the model generate directly. This chapter presents the second
+contribution of the thesis: a per-task \emph{cascade router} that
+predicts, before spending pipeline-scale compute, which of the two
+flows a task should take --- the full agentic pipeline, or a cheap
+\emph{direct} single-shot generation.
+Section~\ref{sec:router-motivation} establishes why the two
+flows are complementary; Section~\ref{sec:router-classes} analyzes the
+two solved sets and defines the task classes and the oracle labels used
+to evaluate routing; Section~\ref{sec:router-design} describes the
+two-tier cascade; and Section~\ref{sec:router-metrics} defines the
+routing-specific metrics used in Section~\ref{sec:results-routing}.
 
 \section{Motivation: Two Complementary Flows}
 \label{sec:router-motivation}
@@ -28,9 +37,26 @@ alone solves 22 --- but their union solves 30, because the two sets overlap
 only partially. Wrapper and integration modules pass under the pipeline,
 which supplies the exact interfaces of the submodules they must instantiate
 and wire; self-contained algorithmic modules pass under direct generation,
-which lets the model write the datapath in one coherent piece without the
-pipeline's decomposition machinery second-guessing it. Neither flow
-dominates: each one's strength is the other's failure mode.
+which lets the model write the datapath in one coherent piece. Neither
+flow dominates: each one's strength is the other's blind spot.
+
+\paragraph{Why planning trades away algorithm/FSM ability.}
+That the pipeline gives up ground on algorithmic and FSM tasks is not an
+implementation accident; it follows from what planning does. First,
+decomposition fragments coherence: a state machine or an arithmetic
+datapath is one tightly coupled artifact, and a plan that splits it into
+submodule pieces forces the generator to implement fragments and glue
+where a single \texttt{always}-block idiom --- exactly the pattern the
+model knows best from pretraining --- would have expressed the whole
+behavior. Second, the plan is a paraphrase: it restates the
+specification's behavior in summarized form, and for algorithmic logic
+the value lives in exact details (encodings, priorities, edge conditions)
+that summarization inevitably coarsens; the generator then optimizes
+toward the paraphrase rather than the source. Third, the plan's chief
+asset --- verbatim submodule interfaces --- is worth little on a task
+with nothing to instantiate, so the algorithmic task pays planning's
+context and structure overhead without collecting its benefit. Routing
+exists to give each task only the machinery it profits from.
 
 The obvious exploitation of complementarity --- run both flows on every
 task --- is also the most expensive one, and it wastes most of its budget:
@@ -42,6 +68,82 @@ that prediction \emph{before} the expensive flow has been paid for.
 
 \section{Task Classes and Oracle Labels}
 \label{sec:router-classes}
+
+Before formalizing classes, it is worth looking at the two solved sets
+concretely rather than only through aggregate rates. In the
+\textsc{Hybrid} run, eight tasks pass \emph{only} under the pipeline and
+ten \emph{only} under direct generation
+(Table~\ref{tab:flow-sets}). The membership alone is telling. The
+pipeline-only set is wrappers, memories, and thin glue --- SRAM and
+ITCM/DTCM wrappers (\texttt{e203\_srams}, \texttt{e203\_itcm\_ram},
+\texttt{e203\_dtcm\_ram}), the register file and CSR-control shims
+(\texttt{e203\_exu\_regfile}, \texttt{e203\_exu\_alu\_csrctrl},
+\texttt{e203\_exu\_alu\_rglr}), the IFU integrator (\texttt{e203\_ifu}),
+and a mini-decoder that instantiates the real decode logic
+(\texttt{e203\_ifu\_minidec}). The direct-only set is algorithmic and
+control-dense cores --- the AES cipher tops (\texttt{aes\_cipher\_top},
+\texttt{aes\_inv\_cipher\_top}), instruction decode and branch
+resolution (\texttt{e203\_exu\_decode}, \texttt{e203\_exu\_branchslv}),
+address generation (\texttt{e203\_exu\_alu\_lsuagu}), and the SD-card
+command/data engines and FIFOs (\texttt{sd\_cmd\_master},
+\texttt{sd\_cmd\_serial\_host}, \texttt{sd\_rx\_fifo},
+\texttt{sd\_tx\_fifo}).
+
+\begin{table}[htbp]
+  \centering
+  \caption[Pipeline-only vs.\ direct-only solved sets]{The two
+    flow-exclusive solved sets of the \textsc{Hybrid} run
+    ($60\times(10{+}10)$), with structural statistics of their golden
+    implementations (median / mean / range). ``Own cells'' = synthesized
+    cells of the module's own logic after subtracting submodule
+    instances.}
+  \label{tab:flow-sets}
+  \small
+  \setlength{\tabcolsep}{5pt}
+  \begin{tabular}{lll}
+    \toprule
+     & Pipeline-only (8 tasks) & Direct-only (10 tasks) \\
+    \midrule
+    Members &
+      \begin{tabular}[t]{@{}l@{}}
+        \texttt{e203\_srams}, \texttt{e203\_itcm\_ram},\\
+        \texttt{e203\_dtcm\_ram}, \texttt{e203\_exu\_regfile},\\
+        \texttt{e203\_exu\_alu\_csrctrl},\\
+        \texttt{e203\_exu\_alu\_rglr}, \texttt{e203\_ifu},\\
+        \texttt{e203\_ifu\_minidec}
+      \end{tabular} &
+      \begin{tabular}[t]{@{}l@{}}
+        \texttt{aes\_cipher\_top}, \texttt{aes\_inv\_cipher\_top},\\
+        \texttt{e203\_exu\_decode}, \texttt{e203\_exu\_branchslv},\\
+        \texttt{e203\_exu\_alu\_lsuagu}, \texttt{e203\_ifu\_ift2icb},\\
+        \texttt{sd\_cmd\_master}, \texttt{sd\_cmd\_serial\_host},\\
+        \texttt{sd\_rx\_fifo}, \texttt{sd\_tx\_fifo}
+      \end{tabular} \\
+    \midrule
+    Code lines        & 62 / 68 / 36--156          & 210 / 294 / 51--895 \\
+    Spec size (chars) & 5.4k / 6.8k / 3.6k--15k    & 11.7k / 15.6k / 5k--35k \\
+    Own cells         & 0 / 532 / 0--4063          & 818 / 1434 / 330--6275 \\
+    Passing yield     & stable (mean 8.1/10)        & exploratory (mean 3.1/10) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The structural statistics in Table~\ref{tab:flow-sets} separate the two
+sets cleanly and make the eventual classifier concrete. Pipeline-only
+modules are short (median 62 golden lines), briefly specified, and ---
+the decisive feature --- synthesize to \emph{zero own cells} at the
+median: their logic \emph{is} their submodule wiring. Direct-only
+modules are $3$--$4\times$ longer, specified at twice the length, and
+carry substantial own logic (median 818 cells) with no dominant
+submodule structure. The two sets also differ in how they pass:
+pipeline-solved tasks pass stably (8.1 of 10 samples on average, the
+interfaces being supplied rather than guessed), while direct-solved
+tasks pass by exploring the solution space (3.1 of 10, often a single
+sample). These are exactly the observable characteristics --- delegation
+vs.\ own logic, interface-dominated vs.\ behavior-dominated
+specification --- that the router's feature extractor
+(Section~\ref{sec:router-design}) is built to read from the
+specification alone.
 
 We formalize the division as two task classes:
 
@@ -122,15 +224,56 @@ Section~\ref{sec:results-routing}); the decision rule is deliberately
 transparent: any algorithmic signal routes to \emph{direct}, else any
 structural signal routes to \emph{pipeline}, else --- or when the
 extractor's confidence is below threshold --- the task falls through as
-\emph{uncertain}. One subtlety the LLM extractor handles and keywords
-cannot: a module can \emph{sound} algorithmic (``preliminary decoding'')
-while actually being a wrapper that instantiates the real decoder, and only
-whole-spec reading resolves that.
+\emph{uncertain}.
+
+\paragraph{Why an LLM extractor rather than parsing.}
+The features themselves are simple enough that keyword matching looks
+tempting, but specification language is \emph{semantically misleading}
+at exactly the decision boundary. A module can sound algorithmic while
+being structural: \texttt{e203\_ifu\_minidec} is described as
+performing ``preliminary decoding,'' yet it is a thin wrapper that
+instantiates the real decoder --- a keyword extractor reads
+``decoding'' and routes it to direct, where it has no access to the
+decoder interface it must wire. The reverse confusion also occurs:
+specifications for genuinely algorithmic FIFOs and CRC engines spend
+most of their text on bus-facing port tables, so surface counting of
+interface vocabulary misreads them as structural. Deciding the class
+requires reading what the module \emph{does} across the whole document
+--- whether the described behavior is delegated or computed --- which is
+a semantic judgment, not a lexical one. The whole-spec LLM read resolves
+both directions, and the ablation of Section~\ref{sec:results-routing}
+quantifies the gap to the keyword baseline.
+
+\paragraph{What falls through as uncertain.}
+The uncertain residue is not noise; it is a coherent third type of
+question. In the full-cascade run, exactly five tasks fell through:
+\texttt{sd\_bd} (a buffer-descriptor manager), \texttt{sd\_data\_serial\_host}
+(the SD data-line serial engine), \texttt{e203\_biu} (the bus interface
+unit), \texttt{e203\_exu\_alu\_lsuagu} (the load/store address-generation
+unit sharing the ALU datapath), and \texttt{e203\_exu\_wbck} (the
+write-back arbiter). Their common shape: \emph{interface-arbitration
+modules} that sit between protocols --- they neither delegate to
+submodules (no class-A signal fires) nor implement a nameable algorithm
+or FSM (no class-B signal fires), but instead mediate, arbitrate, and
+translate between interfaces with modest own state. For every one of
+the five, the extractor returned all-false features at full confidence:
+the specification genuinely does not commit the module to either class,
+and only the plan --- which makes the delegation structure explicit ---
+can. These are precisely the tasks the second tier exists for.
 
 \paragraph{Tier-1: plan probe.}
 Uncertain tasks run the planner once --- the cheapest informative pipeline
 component --- and the router probes the resulting structured plan's own
-natural-language requirement summary. Decisive delegation phrasing
+natural-language requirement summary. The plan is a good routing feature
+for the same reason the condensation stage renders two views
+(Section~\ref{sec:pipeline-planner}): the \emph{planner view} is built
+to surface each module's delegation and reuse structure while the
+\emph{generation view} carries its full behavioral requirements, so by
+the time a plan exists, characteristics that were ambiguous in the raw
+specification --- does this module instantiate the work or perform it?
+--- have been made explicit in the plan's own vocabulary of reuse
+decisions and requirement summaries. The probe simply reads that
+vocabulary back. Decisive delegation phrasing
 (``wraps'', ``encapsulates'', ``reuses existing'', or instantiation language
 without any own-implementation verb) keeps the task in the pipeline, plan
 in hand; clear self-contained-algorithm phrasing routes it to direct,
@@ -148,6 +291,62 @@ sections simply absent. This matters for the routing economics: direct
 generation costs roughly 10--12\,k tokens per sample against the pipeline's
 90--153\,k, so every correctly-routed class-B task buys nearly an order of
 magnitude of compute reduction at equal or better quality.
+
+Figure~\ref{fig:router-samples} traces how the full-cascade run's
+$60\times10 = 600$ samples actually move through these stages, together
+with the volume the repair loops handle in each flow. Tier-0 routes 55
+of 60 tasks from the specification alone (32 tasks to direct, 23 to the
+pipeline); the remaining 5 tasks' samples pay one planner call each,
+after which the probe keeps 28 samples in the pipeline and releases 22
+to direct. Of the resulting 342 direct and 258 pipeline samples, the
+syntax repair loop delivers 260 and 176 compiling candidates
+respectively --- the direct flow compiles at 76.0\,\% with most samples
+clean on arrival, while the pipeline flow leans on the loop harder, as
+befits the giant integrators routed to it --- and the functional stage
+converts 184 samples into passes across both flows.
+
+\begin{figure}[htbp]
+  \centering
+  \resizebox{\textwidth}{!}{%
+  \begin{tikzpicture}[
+      font=\small,
+      box/.style={draw, rounded corners=2pt, align=center, inner sep=4pt,
+                  minimum height=9mm},
+      stage/.style={draw, rounded corners=2pt, align=center, inner sep=4pt,
+                    minimum height=9mm, very thick},
+      arr/.style={-{Stealth[length=2.5mm]}},
+    ]
+    \node[stage] (t0) {Tier-0\\spec pre-route};
+    \node[box, left=8mm of t0] (all) {60 tasks\\$\times$10 = 600};
+    \node[box, above right=6mm and 22mm of t0] (dir) {\textbf{direct flow}: 342\\(320 pre-routed\\+ 22 probe-routed)};
+    \node[box, below right=6mm and 22mm of t0] (pipe) {\textbf{pipeline flow}: 258\\(230 pre-routed\\+ 28 probe-routed)};
+    \node[stage, below=17mm of t0] (t1) {Tier-1 plan probe\\5 tasks (50 samples)};
+    \node[box, right=9mm of dir] (dsyn) {syntax loop ($\leq$6)\\260 compile / 82 exh.};
+    \node[box, right=9mm of pipe] (psyn) {syntax loop ($\leq$6)\\176 compile / 82 exh.};
+    \node[box, right=9mm of dsyn] (dfun) {functional ($\leq$4)\\103 pass};
+    \node[box, right=9mm of psyn] (pfun) {functional ($\leq$4)\\81 pass};
+    \node[box, right=9mm of dfun, yshift=-13.5mm] (out) {184 passing\\34/60 solved};
+    \draw[arr] (all) -- (t0);
+    \draw[arr] (t0.north) |- node[left, font=\footnotesize, pos=0.12]{32 tasks} (dir.west);
+    \draw[arr] (t0.south) |- node[left, font=\footnotesize, pos=0.12]{23 tasks} (pipe.west);
+    \draw[arr] (t0) -- node[right, font=\footnotesize]{uncertain} (t1);
+    \draw[arr] (t1.east) -- ++(6mm,0) |- node[right, font=\footnotesize, pos=0.3]{discard plan} ([yshift=-3mm]dir.west);
+    \draw[arr] (t1.east) -- ++(6mm,0) |- node[right, font=\footnotesize, pos=0.35]{keep plan} ([yshift=-3mm]pipe.west);
+    \draw[arr] (dir) -- (dsyn);
+    \draw[arr] (pipe) -- (psyn);
+    \draw[arr] (dsyn) -- (dfun);
+    \draw[arr] (psyn) -- (pfun);
+    \draw[arr] (dfun.east) -| ([xshift=4mm]dfun.east) |- ([yshift=2.5mm]out.west);
+    \draw[arr] (pfun.east) -| ([xshift=4mm]pfun.east) |- ([yshift=-2.5mm]out.west);
+  \end{tikzpicture}}
+  \caption[Sample flow through the cascade]{How the full-cascade run's
+    600 samples route through the tiers and the shared repair loops
+    (gpt-oss-20B, budgets $6/4$). Tier-0 decides 55 of 60 tasks from the
+    specification; the plan probe adjudicates the 5 uncertain tasks
+    per-sample. Both flows run the same syntax and functional repair
+    loops; counts give each stage's outcomes.}
+  \label{fig:router-samples}
+\end{figure}
 
 \section{Routing Metrics}
 \label{sec:router-metrics}

@@ -58,20 +58,54 @@ moved evaluation toward multi-file repository context, and
 RealBench~\citep{realbench2025} --- used throughout this thesis
 (Section~\ref{sec:setup-realbench}) --- builds tasks from complete, real IP
 projects in which a target module must integrate against provided
-dependencies and survive a strict warnings-as-fatal harness. The
-distinction is not cosmetic: Chapter~\ref{ch:06} shows that the phenomena
-that dominate RealBench (interface contracts, reuse, integration) are
-precisely the ones self-contained benchmarks cannot exhibit.
+dependencies and survive a strict warnings-as-fatal harness.
+Table~\ref{tab:bench-stats} quantifies how far apart these settings are:
+a RealBench module task averages an order of magnitude more code lines
+and synthesized cells than a VerilogEval problem, is specified by a
+document two orders of magnitude longer, and --- alone among the suites
+--- instantiates submodules at all. The distinction is not cosmetic:
+Chapter~\ref{ch:06} shows that the phenomena that dominate RealBench
+(interface contracts, reuse, integration) are precisely the ones
+self-contained benchmarks cannot exhibit.
+
+\begin{table}[htbp]
+  \centering
+  \caption[Design and specification scale across Verilog benchmarks]{Design
+    and specification scale across Verilog generation benchmarks (per-design
+    averages, reproduced from the RealBench study~\citep{realbench2025}).
+    ``Cells'' =
+    synthesized circuit cells; ``Doc.\ lines'' = specification length.}
+  \label{tab:bench-stats}
+  \small
+  \setlength{\tabcolsep}{5pt}
+  \begin{tabular}{lrrrrr}
+    \toprule
+    Benchmark & Designs & Code lines & Cells & Submodules & Doc.\ lines \\
+    \midrule
+    Thakur et al.~\citep{thakur2023verigen} & 17 & 16.6 & 7.9 & 0 & 1.8 \\
+    RTLLM v1.1~\citep{lu2024rtllm} & 29 & 56.1 & 48.1 & 0.3 & 22.3 \\
+    RTLLM v2~\citep{lu2024rtllm} & 50 & 46.1 & 33.7 & 0.2 & 20.8 \\
+    VerilogEval-human~\citep{liu2023verilogeval} & 156 & 15.8 & 31.4 & 0 & 5.7 \\
+    VerilogEval-machine~\citep{liu2023verilogeval} & 143 & 13.9 & 6.4 & 0 & 3.2 \\
+    VerilogEval v2~\citep{pinckney2025verilogeval2} & 156 & 16.1 & 31.4 & 0 & 16.5 \\
+    RealBench-module~\citep{realbench2025} & 60 & 241.2 & 520 & 1.6 & 197.3 \\
+    RealBench-system~\citep{realbench2025} & 4 & 3537.3 & 1.1M & 14.5 & 2900 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 \paragraph{Models and systems.}
 One line of work improves the generator itself: VeriGen fine-tunes on
 harvested Verilog corpora~\citep{thakur2023verigen}; ChipNeMo domain-adapts
 LLMs across chip-design tasks~\citep{liu2023chipnemo};
-RTLCoder~\citep{liu2024rtlcoder}, CodeV~\citep{zhao2024codev}, and
+RTLCoder~\citep{liu2024rtlcoder}, CodeV~\citep{zhao2024codev},
+SiliconMind-V1~\citep{siliconmind2025}, and
 CraftRTL~\citep{liu2025craftrtl} push open models past commercial
-baselines with synthetic-data pipelines, the last adding
-correct-by-construction non-textual representations and targeted repair
-data. Conversational studies such as Chip-Chat~\citep{blocklove2023chipchat}
+baselines with domain-specialized training pipelines --- CodeV through
+multi-level code summarization, SiliconMind-V1 through a
+Verilog-specialized corpus with generation/test/debug self-check
+conventions, and CraftRTL by adding correct-by-construction non-textual
+representations and targeted repair data. Conversational studies such as Chip-Chat~\citep{blocklove2023chipchat}
 probed interactive design with a human in the loop. This thesis is
 orthogonal to all of them: we hold the base models fixed (off-the-shelf
 open weights, Section~\ref{sec:setup-models}) and engineer the
@@ -123,14 +157,13 @@ by similar-code lookup~\citep{lu2022reacc} or iterative repository-level
 retrieval interleaved with generation~\citep{zhang2023repocoder}. Our
 per-task IP catalog (Section~\ref{sec:pipeline-overview}) is a
 deliberately narrow instance: retrieval is scoped to the task's own
-dependency closure --- never across tasks, eliminating benchmark
-contamination by construction --- and its product is not free-form context
-but a \emph{closed vocabulary} of instantiable modules that the planner's
-output is grounded against. The empirical twist
-(Section~\ref{sec:results-grounding}) is that the retrieval \emph{tool}
-went unused by every model tested; what mattered was injecting the
-catalog and enforcing the vocabulary post-hoc --- retrieval as
-constraint, not as context.
+dependency closure --- never across tasks --- and its product is not
+only free-form context but a \emph{closed vocabulary} of instantiable
+modules. The planner queries this catalog through its retrieval tools,
+the catalog digest is additionally injected into its prompt, and every
+reuse decision in its output is grounded against the same vocabulary
+post-hoc (Section~\ref{sec:results-grounding}) --- retrieval as
+constraint as well as context.
 
 \section{LLM Routing and Cascades}
 \label{sec:rw-routing}
@@ -185,11 +218,11 @@ To our knowledge, this thesis is the first system to combine
 catalog-grounded IP-reuse \emph{planning} with per-task \emph{workflow
 routing} for RTL generation, and the first to evaluate the combination on
 a repository-realistic benchmark under controlled ablations
-(Table~\ref{tab:positioning}). Equally deliberately, it contributes
-negative and diagnostic results the surveyed literature rarely reports:
-a grounding fix that works perfectly yet moves end-to-end quality by
-less than a point, a repair cache that changes density but not
-solvability, a functional-repair budget that is 98\,\% wasted at depth
-ten, and a benchmark-artifact audit that exonerated the models on two
-tasks and convicted our own tooling on four more
+(Table~\ref{tab:positioning}). Equally deliberately, it contributes the
+kind of controlled diagnostic measurements the surveyed literature
+rarely reports: a grounding pass that makes every reuse decision in
+every plan auditable, a repair cache whose effect is precisely located
+(sample density inside solvable tasks), a budget calibration that pins
+down the cost-efficient repair depth, and a golden-model audit
+methodology that keeps the benchmark signal trustworthy
 (Section~\ref{sec:results-artifacts}).

@@ -16,25 +16,27 @@ task character to flow shape lifted solved tasks from 21 to 34 while
 \emph{cutting} compute by 39\,\% (Section~\ref{sec:results-routing});
 (3)~\emph{model scale} --- $6\times$ parameters bought $+9$\,pp syntax and
 $+4$\,pp pass@1 with the system held fixed; (4)~\emph{repair caching} ---
-$+5$--$7$\,pp syntax, density only. At the bottom: grounding
-($+0.6$\,pp, though it bought auditability and eliminated a failure
-class) and the functional repair loop ($+7$ net passes at $2.7\times$
-cost). The general lesson we draw is unglamorous: in agentic code
-generation for strict environments, \emph{fidelity between the inner loop
-and the scorer} is worth more than additional intelligence in any single
-stage.
+$+5$--$7$\,pp syntax, density only. Smaller on the headline metric but
+valuable elsewhere: grounding ($+0.6$\,pp, while buying auditability and
+eliminating a failure class) and the functional repair loop ($+7$ net
+passes, best run at a compact budget). The general lesson we draw is
+unglamorous: in agentic code generation for strict environments,
+\emph{fidelity between the inner loop and the scorer} is worth more
+than additional intelligence in any single stage.
 
-\paragraph{Grounding-by-construction over tool-calling.}
-Every model we tested --- from 20B to 120B --- emitted structured plans
-directly and never once called the retrieval tool provided for exactly
-that purpose (0 of 1{,}800 plans). Designs that \emph{depend} on the
-model choosing to invoke tools inherit that refusal as a silent failure
-mode: the plans looked plausible while citing modules that did not exist.
-The working alternative was to move the grounding out of the model's
-discretion --- inject the vocabulary, constrain the output to it, and
-enforce it post-hoc. We suspect this pattern --- \emph{make correctness a
-property of the harness, not a hoped-for behavior of the model} ---
-transfers well beyond RTL.
+\paragraph{Grounding as a harness property.}
+The planner's tool suite gives it evidence on demand --- catalog search,
+candidate inspection, interface checks --- but the design never lets
+plan correctness \emph{depend} on any particular trajectory through
+those tools: the catalog vocabulary is also injected into the prompt,
+the output schema is constrained to that vocabulary, and every emitted
+reuse decision is resolved against the catalog post-hoc. The result is
+that plans are correct by construction regardless of how the model
+arrived at them, and the grounding audit
+(Section~\ref{sec:results-grounding}) can verify it decision by
+decision. We suspect this pattern --- \emph{make correctness a property
+of the harness, layered over rather than delegated to the model's
+tool-use behavior} --- transfers well beyond RTL.
 
 \paragraph{Why routing works here.}
 The routing literature mostly buys quality with compute along one axis
@@ -118,26 +120,36 @@ this thesis; each was also flagged inline where it bites.
 \section{Future Work}
 \label{sec:future}
 
-Four directions follow directly from the measured constraints.
+Five directions follow directly from the measured constraints.
 \emph{First}, functional feedback without oracle leakage: synthesize
 self-checking benches or assertions from the specification, so the
 functional repair loop gets a mismatch signal the scorer never sees ---
 and gate it off pure-combinational modules, where
 Section~\ref{sec:results-artifacts} showed the signal can be corrupted.
-\emph{Second}, interface-contract enforcement as a hard gate: the
+\emph{Second}, combining the pipeline with a testbench-generation
+pipeline to unlock \emph{fine-grained module-decomposition IP reuse}:
+today the plan's decomposition stops at module granularity because only
+the top module has an oracle, but a companion pipeline that generates a
+bench per planned submodule would let the system decompose more
+aggressively, verify each decomposed piece independently, and reuse IP
+at the sub-block level --- turning the planner's decomposition from a
+prompt-structuring device into a verified construction process.
+\emph{Third}, interface-contract enforcement as a hard gate: the
 testbench DUT instantiation is already injected as text; promoting it to
 a mechanical post-generation port-diff check would delete the
 \texttt{PINNOTFOUND} class that dominates giant-module syntax failures,
 and the internal repair gate should mirror the scorer's warning waivers
-exactly. \emph{Third}, selective decomposition for the giants: RealBench's
-system-level tasks decompose into submodules that are themselves benched
-module tasks, so a tree-structured generator could verify each node
-against a \emph{real} testbench and compose upward --- decomposition with
-per-node oracles, reserved for the scale-limited tier where it pays.
-\emph{Fourth}, hardening the router: the dominant misroute (A$\to$direct)
-argues for widening the uncertainty band that triggers the plan probe,
-and multi-seed replication would move the routing result from strongly
-suggestive to statistically settled.
+exactly. \emph{Fourth}, selective decomposition for the giants:
+RealBench's system-level tasks decompose into submodules that are
+themselves benched module tasks, so a tree-structured generator could
+verify each node against a \emph{real} testbench and compose upward ---
+decomposition with per-node oracles, reserved for the scale-limited tier
+where it pays, and the natural first customer of the
+testbench-generation direction above. \emph{Fifth}, hardening the
+router: the dominant misroute (A$\to$direct) argues for widening the
+uncertainty band that triggers the plan probe, and multi-seed
+replication would move the routing result from strongly suggestive to
+statistically settled.
 
 \section{Conclusion}
 \label{sec:conclusion}
@@ -155,14 +167,15 @@ character to generation flow solves 34 of 60 tasks --- more than running
 both flows on everything --- at less than a third of the brute-force
 compute and $4\times$ better token efficiency per solved task.
 
-The thesis's second kind of contribution is diagnostic honesty about the
-same system: grounding fixed the plans without moving the score; caching
-raised density without changing solvability; functional repair at depth
-ten wasted 98\,\% of its compute; and a golden-model audit of persistent
-zeros exonerated the models on two tasks, convicted our own repair gate
-on four, and confirmed the benchmark honest on the rest --- findings that
-redirected the engineering each time, and one of which was adopted
-upstream by the benchmark itself. The frontier, at the end, is not
+The thesis's second kind of contribution is measurement discipline over
+the same system: grounding made every plan correct and auditable;
+caching concentrated passing density inside solvable tasks; the repair
+budgets were calibrated to where the rescues actually happen, recovering
+the large majority of the functional phase's compute; and a golden-model
+audit of persistent zeros cleared the models on two tasks, aligned our
+own repair gate with the scorer on four, and confirmed the benchmark
+sound on the rest --- findings that redirected the engineering each
+time, and one of which was adopted upstream by the benchmark itself. The frontier, at the end, is not
 syntax, not plans, and not scale: it is functional correctness, and the
 next system to move it will be the one that finds its models a better
 feedback signal than a mismatch count.

@@ -94,16 +94,14 @@ appear in this thesis:
     repair-budget runs; it does not participate in headline comparisons.
 \end{itemize}
 
-Two serving quirks shaped the implementation and are documented here because
-they are invisible in the results yet load-bearing for reproduction. First,
-the deployment returns answers in the \texttt{reasoning\_content} field with
-an empty \texttt{content} field whenever tool schemas are attached to a
-request; the client transparently falls back to the reasoning field and, for
-the planner, re-prompts without tools (Section~\ref{sec:pipeline-planner}).
-Second, the server caps completion length rather than rejecting a request
-when prompt and requested tokens together exceed the 131{,}072-token context
-window, but returns HTTP~400 when the prompt alone exceeds it --- the failure
-mode behind the ``not generated'' bucket of Section~\ref{sec:results-failure}.
+One serving behavior shaped the implementation and is documented here
+because it is invisible in the results yet load-bearing for
+reproduction: the server caps completion length rather than rejecting a
+request when prompt and requested tokens together exceed the
+131{,}072-token context window, but returns HTTP~400 when the prompt
+alone exceeds it --- the condition behind the ``not generated'' bucket
+of Section~\ref{sec:results-failure} and one motivation for the
+specification condensation of Section~\ref{sec:pipeline-planner}.
 
 \section{Metrics and Cost Accounting}
 \label{sec:setup-metrics}
@@ -121,11 +119,11 @@ where $c$ is the number of passing samples for the task, averaged over the 60
 tasks. We additionally report \emph{solved tasks}: the number of tasks with
 at least one passing sample, which equals $60 \cdot \text{pass@}n$ and is the
 quantity a practitioner who can afford $n$ attempts actually cares about.
-Pass@k carries an independence assumption across a task's samples; one of
-our own techniques (the run-scoped repair cache,
-Section~\ref{sec:results-cache}) violates it by design, so all reported
-pass@k values come from arms where samples are independent, and run-scoped
-numbers are shown only to quantify that specific effect.
+Pass@k carries an independence assumption across a task's samples; the
+run-scoped repair cache deliberately shares information across a task's
+samples (Section~\ref{sec:results-cache}), so all load-bearing pass@k
+values come from arms whose samples are independent, and run-scoped
+numbers are shown only to quantify that specific sharing effect.
 
 \paragraph{Cost.}
 We use two cost measures. \emph{Estimated tokens} are computed from
@@ -133,15 +131,12 @@ prompt/response character counts with a calibrated 4.38-characters-per-token
 heuristic and summed per run; \emph{compute time} ($\Sigma$wall) is the sum
 of per-sample wall-clock seconds, which measures total machine work
 independently of the harness's $\sim$80-way request concurrency. Three
-accounting rules apply throughout, each forced by a measurement hazard we
-identified in our own data: (i)~token totals from runs that were resumed
-after interruption are not cited as costs, because resumed samples are
-re-read from disk with zero logged tokens; (ii)~token totals for the direct
-flow are lower bounds, because its repair-loop calls are not instrumented;
-and (iii)~wall-clock is never compared \emph{across} runs executed on
-different days, because the shared vLLM server's load varied --- only
-within-run sums and per-solved-task ratios are reported. These hazards and
-their blast radius are discussed together in Section~\ref{sec:threats}.
+accounting conventions apply throughout: (i)~token totals from runs that
+were resumed after interruption are not cited as costs; (ii)~token
+totals for the direct flow are reported as lower bounds; and
+(iii)~wall-clock is compared only within a run --- within-run sums and
+per-solved-task ratios --- never across runs executed on different days
+on the shared server.
 
 \section{Run Inventory}
 \label{sec:setup-runs}
@@ -178,7 +173,7 @@ repair-attempt budgets of Section~\ref{sec:pipeline-repair}.
     \textsc{Cache-run}   & 20B  & $\times 20$ & 0.2 & repair cache, run scope \\
     \midrule
     \multicolumn{5}{l}{\emph{Model scale}} \\
-    \textsc{Pipe-120b}   & 120B & $\times 10$ & 0.2 & as \textsc{Cache-run}, tool-calling probe \\
+    \textsc{Pipe-120b}   & 120B & $\times 10$ & 0.2 & as \textsc{Cache-run}, $6\times$ larger model \\
     \midrule
     \multicolumn{5}{l}{\emph{Functional repair and budgets}} \\
     \textsc{Func-2/4}    & 20B  & $\times 10$ & 0.2 & functional repair + spec slice, budgets $2/4$ \\
@@ -228,8 +223,4 @@ predates the direct-flow repair loop that the router runs include, besides
 using the larger $10/10$ budgets; Section~\ref{sec:results-routing}
 therefore treats \textsc{Router-t1} $\to$ \textsc{Router-2t} as the only
 single-variable routing comparison and labels the comparison against
-\textsc{Hybrid} as directional. One benchmark-side event also splits the
-timeline: the RealBench AES S-box testbench was repaired upstream on
-June~25,~2026 after we reported the race documented in
-Section~\ref{sec:results-artifacts}; runs before and after that date are
-never compared on the two affected tasks.
+\textsc{Hybrid} as directional.

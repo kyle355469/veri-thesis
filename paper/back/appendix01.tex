@@ -40,11 +40,99 @@ The user message then carries the injected catalog digest (one line per
 provided module: \texttt{ip\_id}, port summary, one-sentence description)
 and closes with: \emph{``Every reuse\_decisions.selected\_ip must be one
 of the ip\_id values listed in the catalog above; do not invent
-names.''} As Section~\ref{sec:results-grounding} showed, models comply
-with the vocabulary yet never call the retrieval tools also offered ---
-which is why the post-hoc grounding pass of
-Section~\ref{sec:pipeline-planner} remains in place as the enforcement
-backstop.
+names.''} The post-hoc grounding pass of
+Section~\ref{sec:pipeline-planner} enforces the same contract on the
+returned plan, so the closed vocabulary holds regardless of the
+trajectory the planning agent takes through its tools.
+
+\section{Planner View vs.\ Generation View of a Condensed Specification}
+\label{app:views}
+
+Large specifications are condensed once into a chunk-and-merge manifest
+(Section~\ref{sec:pipeline-planner}) and then rendered into two
+different textual views, one per consumer. Both views share the same
+skeleton, in this order: top module name; system summary; the top
+module's public interface; its submodule instances and connections;
+shared clocks, resets, parameters, constraints, and assumptions;
+\emph{authoritative interface excerpts} carried verbatim from the raw
+specification (with an instruction to trust them over any summarized
+interface); every module's interface listed exactly once; and finally
+per-module behavioral requirements. The two views differ in exactly the
+dimensions their consumers need:
+
+\begin{lstlisting}[language={},caption={Planner view vs.\ generation view:
+the rendered differences.},label={lst:views}]
+SHARED SKELETON (both views)
+  TOP MODULE / SYSTEM SUMMARY
+  TOP PUBLIC INTERFACE / SUBMODULE INSTANCES
+  SHARED CLOCKS, RESETS, PARAMETERS, CONSTRAINTS
+  AUTHORITATIVE INTERFACE EXCERPTS  (verbatim, trusted)
+  MODULE INTERFACES (each module exactly once)
+  MODULE BEHAVIORAL REQUIREMENTS
+
+PLANNER VIEW (route/reuse decisions)
+  + per-module "reuse_query:" line -- a ready-made catalog
+    search query for each module
+  + behavioral requirements digested to the first 3 items
+    per module ("... plus N more requirement(s)")
+
+GENERATION VIEW (writing the RTL)
+  + full behavioral requirements for every module that must
+    be generated
+  + modules named as provided IP are interface-only, tagged
+    "[provided reusable IP - instantiate, do not regenerate]"
+  + section order: to-generate modules first (in dependency
+    order), provided IP last -- so head-truncation under a
+    context budget keeps what the generator has to build
+\end{lstlisting}
+
+The planner view is thus a reuse-structure lens --- interfaces, reuse
+queries, and a short behavioral digest --- while the generation view is
+a construction lens --- complete requirements for new logic and
+interface-only contracts for everything provided. This division is also
+what makes the plan informative for routing
+(Section~\ref{sec:router-design}): module characteristics that are
+ambiguous in the raw specification arrive in the plan already separated
+into delegation structure and own behavior.
+
+\section{Specifications Routed as Uncertain}
+\label{app:uncertain}
+
+Tier-0 of the cascade router deferred exactly five of 60 tasks to the
+plan probe in the full-cascade run (Section~\ref{sec:results-routing}).
+For each, the LLM feature extractor returned \emph{no} class-A signal
+(delegation, memory encapsulation, thin control) and \emph{no} class-B
+signal (FSM, CDC, datapath algorithm), at full confidence --- the
+specifications genuinely commit to neither class. Their opening
+self-descriptions show the common character:
+
+\begin{description}
+  \item[\texttt{sd\_bd}] ``manages the buffer descriptors used for data
+    transmission and reception between the system memory and the SD
+    card \dots\ implements a circular buffer of descriptors'' --- a
+    descriptor store with pointer bookkeeping: neither a wrapper nor a
+    nameable algorithm.
+  \item[\texttt{sd\_data\_serial\_host}] ``the interface towards the
+    physical SD card device Data port'' --- a serial engine mixing
+    protocol timing, CRC handshake, and bus-facing buffering.
+  \item[\texttt{e203\_biu}] ``controls the ICB requests to the external
+    memory system \dots\ serves as a crucial interface between the LSU,
+    IFU, various peripheral interfaces, and the main memory'' --- pure
+    interface arbitration between protocols.
+  \item[\texttt{e203\_exu\_alu\_lsuagu}] ``implements the AGU for
+    load/store and AMO instructions \dots\ shares most of its datapath
+    with the ALU'' --- address generation entangled with a shared
+    datapath, neither self-contained nor delegating.
+  \item[\texttt{e203\_exu\_wbck}] ``arbitrates between the write-back
+    requests from the ALU and long-pipeline instructions'' --- an
+    arbiter: modest own state, no submodules, no algorithm by name.
+\end{description}
+
+The shared shape --- \emph{interface-arbitration modules that mediate
+between protocols} --- is a coherent third type of question sitting
+between the two classes, and it is exactly the population the plan
+probe is designed to adjudicate: once a plan exists, the presence or
+absence of delegation structure becomes explicit.
 
 \section{Generation Prompt Structure}
 

@@ -6,15 +6,20 @@
 \section{Motivation}
 \label{sec:intro-motivation}
 
-Large language models write software with startling competence, and an
-industry has grown around turning that competence into engineering
-practice. Hardware description languages look, superficially, like the
-next domain over: Verilog is text, compiles, and has testbenches. But the
-economics of hardware make correctness qualitatively harsher --- an RTL
-bug that reaches silicon is not patched, it is respun --- and the daily
-reality of hardware engineering differs from the coding-benchmark ideal
-in a way that matters more than syntax: \emph{real RTL work is dominated
-by integration and reuse, not by writing fresh algorithms}. A working
+Large language models have recently shown an explosive growth of
+capability across nearly every domain of study and research --- they
+draft and refactor software systems, accelerate biological discovery,
+and increasingly act as day-to-day research assistants --- and an
+industry has grown around turning that capability into engineering
+practice. Hardware design is one of the most active new directions for
+this wave. Hardware description languages look, superficially, like the
+next domain over from software: Verilog is text, compiles, and has
+testbenches. But the economics of hardware make correctness
+qualitatively harsher --- an RTL bug that reaches silicon is not
+patched, it is respun --- and the daily reality of hardware engineering
+differs from the coding-benchmark ideal in a way that matters more than
+syntax: \emph{real RTL work is dominated by integration and reuse, not
+by writing fresh algorithms}. A working
 chip is assembled from verified IP blocks; the engineer's craft lies in
 instantiating existing modules correctly, honoring interface contracts
 pin for pin, and wiring subsystems whose specifications run to hundreds
@@ -64,20 +69,21 @@ it.
 \section{Contributions}
 \label{sec:intro-contributions}
 
-This thesis makes four contributions, each evaluated on the same 60-task
-benchmark under controlled ablations.
+This thesis makes three contributions, each evaluated on the same
+60-task benchmark under controlled ablations.
 
 \begin{enumerate}
   \item \textbf{A two-stage agentic IP-reuse pipeline}
-    (Chapter~\ref{ch:03}): a planning agent that emits a structured reuse
-    plan grounded --- by construction, not by hoped-for tool use ---
-    against a per-task catalog of the modules the environment actually
-    provides, followed by a generator operating under
-    environment-faithful verification and repair. At temperature~0 the
-    pipeline passes 25.0\,\% of tasks against the same model's direct
-    10.0\,\% ($2.5\times$; syntax $2.3\times$), with the entire gain
-    concentrated in the reuse-rich processor-core family
-    (Section~\ref{sec:results-headline}).
+    (Chapter~\ref{ch:03}): a planning agent that works the task through
+    a suite of IP-reuse tools --- catalog search, candidate inspection
+    and scoring, and interface-compatibility verification --- and emits
+    a structured reuse plan grounded against a per-task catalog of the
+    modules the environment actually provides, followed by a generator
+    operating under environment-faithful verification and repair. At
+    temperature~0 the pipeline passes 25.0\,\% of tasks against the
+    same model's direct 10.0\,\% ($2.5\times$; syntax $2.3\times$),
+    with the entire gain concentrated in the reuse-rich processor-core
+    family (Section~\ref{sec:results-headline}).
   \item \textbf{A cascade router between generation flows}
     (Chapter~\ref{ch:04}): a two-tier router --- spec-level LLM
     pre-routing plus a plan probe for the uncertain residue --- that
@@ -89,27 +95,20 @@ benchmark under controlled ablations.
     (Section~\ref{sec:results-routing}).
   \item \textbf{Controlled measurements of the supporting machinery}
     (Chapter~\ref{ch:06}): a semantic repair cache that lifts syntax
-    monotonically (59.4\,\%$\to$66.9\,\%) yet leaves task solvability
-    exactly unchanged; a repair-budget calibration showing both repair
-    phases are fix-fast-or-never, with 98\,\% of a depth-ten functional
-    budget producing nothing; and a functional repair loop quarantined
-    as a separate arm because its feedback signal is the scoring oracle
+    monotonically (59.4\,\%$\to$66.9\,\%) while concentrating passing
+    samples inside solvable tasks; a repair-budget calibration showing
+    both repair phases converge within their first attempts, so compact
+    budgets capture nearly all attainable value at a fraction of the
+    compute; and a functional repair loop reported as its own
+    experimental arm because its feedback signal is the scoring oracle
     --- an accounting line this literature rarely draws.
-  \item \textbf{A benchmark-artifact audit methodology and its findings}
-    (Section~\ref{sec:results-artifacts}): running golden
-    implementations through the full scoring path to adjudicate
-    persistent zeros. The audit uncovered a testbench race that scored
-    provably byte-perfect S-box implementations as total failures ---
-    reproduced, root-caused to a coverage-instrumentation interaction,
-    and subsequently fixed upstream in the benchmark --- while
-    \emph{confirming} other zeros as genuine, and catching our own
-    repair gate being stricter than the scorer on four tasks.
 \end{enumerate}
 
-Throughout, negative and null results are reported with the same
-prominence as wins --- the grounding fix that moved end-to-end quality by
-only $+0.6$\,pp is, we argue, as informative as the router's $+13$
-tasks.
+Throughout, every claim is tied to a controlled comparison, and results
+are reported with the same care whether they move the headline metric or
+locate exactly where the next gain must come from --- the grounding pass
+that made every plan auditable is, we argue, as informative as the
+router's $+13$ tasks.
 
 \section{Thesis Organization}
 \label{sec:intro-organization}

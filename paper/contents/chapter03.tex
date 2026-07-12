@@ -6,7 +6,29 @@
 This chapter presents the first contribution of the thesis: a two-stage
 agentic pipeline that generates RTL by first \emph{planning} which existing
 IP blocks to reuse and how to integrate them, and only then generating
-Verilog under a verify-and-repair loop. Section~\ref{sec:pipeline-overview}
+Verilog under a verify-and-repair loop.
+
+The motivation for the two-stage split is the way large language models
+are habitually used --- and the way that habit fails on tasks of this
+scale. The common practice is to hand the model everything at once: the
+full specification, every dependency source, and the request for final
+code in a single giant prompt. On a RealBench task that one-shot prompt
+mixes hundreds of pages of behavioral description with thousands of
+lines of provided RTL, and the model must simultaneously decide
+\emph{what} to build, \emph{what already exists}, and \emph{how to write
+it} --- competing objectives that confuse one another and strain the
+context window, with the interface details that matter most buried in
+the middle of it. Separating the work into a planning stage (decide the
+reuse and integration structure over a compact, interface-centric view)
+and a generation stage (write one module against an already-resolved
+plan) gives each LLM call a single objective and a prompt shaped for
+exactly that objective. The separation is better on both axes we care
+about: accuracy, because each stage sees the right information at the
+right altitude, and efficiency, because the expensive full-context
+reasoning happens once in the plan rather than being re-derived in
+every sample and repair turn.
+
+Section~\ref{sec:pipeline-overview}
 gives the dataflow and the environmental contracts the pipeline must honor.
 Sections~\ref{sec:pipeline-planner} and~\ref{sec:pipeline-generator} describe
 the two stages. Section~\ref{sec:pipeline-repair} describes the three repair
@@ -20,12 +42,17 @@ evaluation is deferred entirely to Chapter~\ref{ch:06}.
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\textwidth]{figures/thesis-fixed-pipe-flow.png}
-  \caption[Two-stage pipeline dataflow]{Dataflow of the two-stage pipeline.
-    A RealBench task is expanded into a per-task IP catalog; the planner
-    emits a grounded reuse plan; the plan adapter enriches it with source
-    code and interface contracts; the generator produces Verilog inside a
-    Verilator verify-and-repair loop before the final benchmark evaluation.}
+  \includegraphics[width=\textwidth]{figures/thesis-full-architecture.png}
+  \caption[Complete system architecture]{Complete architecture of the
+    generation system. The specification is parsed into sub-specs and
+    chunk-summarized into a merged generation plan (bottom center); the
+    generator LLM produces RTL inside a Verilator/Yosys syntax repair
+    loop backed by the semantic repair cache, followed by
+    testbench-driven functional repair (top); interface and behavior
+    slices of the specification feed the two repair loops. The key-attribute
+    extraction path on the left is the cascade router of
+    Chapter~\ref{ch:04}, which decides per task whether generation
+    consumes the plan or proceeds directly.}
   \label{fig:pipeline-flow}
 \end{figure}
 
@@ -33,11 +60,12 @@ The pipeline processes one benchmark task end-to-end as follows
 (Figure~\ref{fig:pipeline-flow}):
 
 \begin{enumerate}
-  \item \textbf{Catalog construction.} The task's own dependency sources ---
-    and only those; no cross-task material ever enters, so there is no
-    benchmark contamination --- are indexed into a per-task \emph{reusable-IP
-    catalog}: one entry per provided module, carrying its name, port list,
-    and source.
+  \item \textbf{Catalog construction.} The dependency sources that the
+    evaluation environment provides for the task are indexed into a
+    per-task \emph{reusable-IP catalog}: one entry per provided module,
+    carrying its name, port list, and source. The catalog is the
+    pipeline's model of what the test environment supplies, and every
+    downstream reuse decision is expressed in its vocabulary.
   \item \textbf{Planning.} The planner (Section~\ref{sec:pipeline-planner})
     reads the specification and the catalog and emits a structured IP-reuse
     plan: requirements, module decomposition, a reuse decision per submodule
@@ -76,26 +104,55 @@ every generation and repair prompt as a hard interface contract.
 \section{Stage One: The Grounded Planner}
 \label{sec:pipeline-planner}
 
-The planner is a tool-calling agent equipped with a \texttt{search\_reuse\_ip}
-tool over the per-task catalog (token-overlap, semantic-embedding, or hybrid
-retrieval backends). Given the specification, it must return a structured
-JSON plan with a fixed schema: requirement summary, module decomposition,
-per-module reuse decisions (\texttt{selected\_ip} naming a catalog entry, or
-\texttt{new\_rtl\_required}), and integration, verification, and debugging
-plans.
+The planner is a tool-calling agent: it plans by interacting with a suite
+of IP-reuse tools scoped to the per-task catalog, and returns a structured
+JSON plan with a fixed schema --- requirement summary, module
+decomposition, per-module reuse decisions (\texttt{selected\_ip} naming a
+catalog entry, or \texttt{new\_rtl\_required}), and integration,
+verification, and debugging plans.
 
-\paragraph{The models do not call tools.}
-The single most consequential empirical fact about this stage is negative:
-across every configuration we ran, the planner \emph{never} invoked its
-retrieval tool --- 0 tool calls in 1{,}200 plans with gpt-oss-20B, and still
-0 in 600 plans with the $6\times$ larger gpt-oss-120B. The models simply
-emit the structured plan directly. Left uncorrected, the reuse decisions in
-those plans are hallucinated from pretraining memory: plausible-but-wrong
-module names such as \texttt{e203\_exu\_core} where the real catalog has
-\texttt{e203\_exu}. Rather than fighting the refusal (prompt pressure,
-forced tool choice, and re-prompting all failed to change it), the final
-design \emph{removes the dependency on tool use} with three mechanisms that
-together we call \emph{grounding-by-construction}:
+\paragraph{The IP-reuse tool suite.}
+Four tools carry the reuse workflow. \texttt{search\_reuse\_ip} queries
+the per-task catalog for candidate modules (token-overlap,
+semantic-embedding, or hybrid retrieval backends, selected by
+\texttt{--planner-search-mode}); \texttt{inspect\_reuse\_ip} returns one
+candidate's behavior, interfaces, parameters, limits, and integration
+notes; \texttt{evaluate\_ip\_candidate} scores a candidate on function
+match, interface compatibility, configurability, and verification
+status; and \texttt{check\_port\_compatibility} parses port declarations
+and verifies that a proposed instantiation's connections are legal.
+Auxiliary tools (\texttt{write\_artifact}, \texttt{generate\_rtl\_module},
+\texttt{validate\_verilog}) let the agent persist plan artifacts and
+sanity-check RTL sketches. The intended interaction per submodule is
+search~$\to$ inspect~$\to$ evaluate~$\to$ decide: the agent searches the
+catalog with a behavioral query, inspects the top candidates' interfaces,
+scores the fit, and only then commits the submodule to a reuse decision.
+
+\paragraph{Reuse or new RTL.}
+The per-module decision between \texttt{selected\_ip} and
+\texttt{new\_rtl\_required} is the plan's load-bearing output, and its
+two error directions cost very differently. Declaring reuse of a module
+that does not fit (or does not exist under that name) plants a fatal
+seed downstream: the generator either re-implements a shipped dependency
+(\texttt{MODDUP}) or instantiates a phantom (\texttt{MISSING-MODULE}),
+both of which kill the sample at compile time. Missing a legitimate
+reuse is gentler but wasteful: the generator re-derives, from prose,
+logic that already exists in verified form --- exactly the work IP reuse
+is meant to eliminate --- and every re-derived line is a fresh
+opportunity for functional error. The decision rule therefore leans on
+evidence: a submodule is marked \texttt{selected\_ip} only when a
+catalog entry matches both its function and its interface obligations,
+and \texttt{new\_rtl\_required} otherwise, with the grounding mechanisms
+below guaranteeing that whichever path produced the name, it resolves to
+a real catalog entry. Because the environment ships dependencies as
+files, reuse decisions also determine prompt composition: reused
+modules enter the generation prompt as interfaces to instantiate,
+new-RTL modules as behavioral requirements to implement.
+
+Three mechanisms make the plan's grounding independent of any single
+step of the agent's trajectory --- whatever mixture of tool evidence and
+direct reading produced a decision, the result is checked against the
+catalog. Together we call them \emph{grounding-by-construction}:
 
 \begin{enumerate}
   \item \textbf{Catalog injection.} The real catalog vocabulary --- every
@@ -110,14 +167,15 @@ together we call \emph{grounding-by-construction}:
     records the grounding outcome per decision, making plans auditable.
   \item \textbf{Completeness gate.} A task whose catalog is non-empty but
     whose plan contains no reuse and no integration content is re-prompted
-    once (tool-free), and the more complete of the two attempts is kept.
+    once, and the more complete of the two attempts is kept.
 \end{enumerate}
 
 Chapter~\ref{ch:06} (Section~\ref{sec:results-grounding}) audits the effect:
-grounding eliminates hallucinated names from plans entirely, and --- an
-equally important honest finding --- barely moves the end-to-end pass rate,
-because the generator was already neutralizing bad names downstream. Plans
-become \emph{correct and auditable}; the binding constraint lies elsewhere.
+grounding eliminates hallucinated names from plans entirely, making every
+plan \emph{correct and auditable}, while the end-to-end pass rate stays
+essentially level --- the generator was already robust to imperfect names
+downstream, so the gain lands in plan quality and auditability rather
+than in raw yield.
 
 \paragraph{Large specifications.}
 Specifications beyond a token threshold (45{,}000 estimated tokens) are
@@ -157,6 +215,21 @@ the benchmark's syntax verdict on 60 of 60 tasks. The cost of this fidelity
 is that Verilator diagnostics can quote testbench or reference lines into
 repair prompts; we return to this leak surface in
 Section~\ref{sec:threats}.
+
+\paragraph{Syntax first, then function.}
+The verification order --- establish syntax correctness, then check
+function --- is a deliberately robust flow, and it mirrors how an RTL
+engineer works: code that does not compile cannot be simulated, so
+functional evidence only exists for compiling candidates. The ordering
+also matches the character of the two feedback signals. Syntax
+diagnostics are precise, local, and actionable (a file, a line, an
+identifier, an error class), so they are worth iterating on first and
+cheaply; functional mismatch reports are coarse and global, so they are
+spent only on candidates that have already cleared the structural
+contracts. Every repair mechanism in the next section is built around
+this two-gate structure: candidates flow through the syntax gate into
+the functional gate, and no repair turn ever advances a candidate that
+regresses the earlier gate.
 
 \section{Repair Mechanisms}
 \label{sec:pipeline-repair}
@@ -230,17 +303,80 @@ verbatim interface excerpts (port tables, module headers) plus only the
 specification sections that mention an offending identifier, under a
 character budget. When a diagnostic names no identifier (e.g., a bare parse
 error), the slicer returns nothing and the full specification is kept, so
-repair is never starved of context. On the largest specification the slice
-is a $\sim$29$\times$ reduction ($\sim$704\,k $\to$ 24\,k characters).
+repair is never starved of context. Interface-topic slices feed the
+syntax repair loop, where the errors are overwhelmingly signal-naming and
+port-contract issues; behavior-topic slices feed the functional repair
+loop, where the model must locate mis-implemented logic.
+
+The compression this buys is large --- on the largest specification the
+slice is a $\sim$29$\times$ reduction ($\sim$704\,k $\to$ 24\,k
+characters) --- but the reduction rate is only meaningful when read
+together with the repair success rate: a smaller prompt that dropped the
+fixing sentence would be a pure regression. The budget calibration of
+Section~\ref{sec:results-budget} shows the slice preserves the signal
+that matters: with sliced repair prompts, the rescues that occur land
+within the first few attempts of both loops, so each rescue is reached
+at a fraction of the full-specification token cost per attempt.
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}[
+      font=\small,
+      node distance=7mm and 10mm,
+      box/.style={draw, rounded corners=2pt, align=center, inner sep=5pt,
+                  minimum height=8mm},
+      ctx/.style={draw, rounded corners=2pt, align=center, inner sep=4pt,
+                  minimum height=7mm, fill=black!4},
+      gate/.style={draw, rounded corners=2pt, align=center, inner sep=5pt,
+                   minimum height=8mm, very thick},
+      arr/.style={-{Stealth[length=2.5mm]}},
+    ]
+    \node[ctx] (plan) {adapted plan\\+ reused-IP sources};
+    \node[ctx, below=4mm of plan] (iface) {interface slice\\+ DUT port contract};
+    \node[ctx, below=4mm of iface] (behav) {behavior slice};
+    \node[box, right=12mm of iface] (llm) {generator /\\repair LLM};
+    \node[box, right=12mm of llm] (rtl) {RTL\\candidate};
+    \node[gate, above right=2mm and 12mm of rtl] (lint) {Verilator lint\\(benchmark file set)};
+    \node[gate, below right=2mm and 12mm of rtl] (tb) {testbench\\simulation};
+    \node[box, above=9mm of llm] (cache) {semantic repair cache\\(verified diagnostic$\to$diff hints)};
+    \node[box, right=10mm of lint, align=center] (out) {final\\candidate};
+    \draw[arr] (plan) -| ([xshift=-6mm]llm.west) -- (llm.west);
+    \draw[arr] (iface) -- (llm);
+    \draw[arr] (behav) -| ([xshift=-6mm]llm.west);
+    \draw[arr] (llm) -- (rtl);
+    \draw[arr] (rtl.east) -- ++(4mm,0) |- (lint.west);
+    \draw[arr] (lint.south) |- node[below, pos=0.75, font=\footnotesize]
+      {diagnostics (syntax loop, $\leq s$)} ([yshift=2mm]llm.north east);
+    \draw[arr] (lint.east) -- node[above, font=\footnotesize]{clean} (out);
+    \draw[arr] ([xshift=6mm]rtl.east) |- (tb.west);
+    \draw[arr] (tb.south) -- ++(0,-4mm) -| node[below, pos=0.25, font=\footnotesize]
+      {mismatch report (functional loop, $\leq f$)} (llm.south);
+    \draw[arr] (cache) -- node[right, font=\footnotesize]{hints} (llm);
+    \draw[arr] (lint.north) |- node[above, pos=0.75, font=\footnotesize]
+      {verified fixes} (cache.east);
+  \end{tikzpicture}
+  \caption[Verify-and-repair loop]{The generator's verify-and-repair loop.
+    A candidate first iterates in the syntax repair loop against the
+    benchmark-faithful Verilator lint (budget $s$), with the semantic
+    repair cache injecting verified diagnostic$\to$fix hints and
+    absorbing new ones; compiling candidates then enter the functional
+    repair loop against the testbench (budget $f$), which keeps the best
+    compiling candidate by mismatch count. Interface and behavior slices
+    of the specification target each loop's prompt.}
+  \label{fig:repair-loop}
+\end{figure}
 
 \section{Summary}
 
-The pipeline's design distills to three commitments. \emph{Ground, don't
-trust}: every reuse decision is resolved against the real catalog because
-models plan from memory even when handed a retrieval tool. \emph{Verify
-against the real environment}: the inner lint compiles exactly what the
-benchmark will compile, making the two fatal contracts visible during
-repair rather than at scoring. \emph{Reuse the model's own verified
-successes}: repair hints come from diffs that already fixed a structurally
-identical failure. What these commitments buy --- and what they
-conspicuously fail to buy --- is quantified in Chapter~\ref{ch:06}.
+The pipeline's design distills to three commitments. \emph{Ground every
+decision}: the planner works over the per-task catalog through its
+reuse tools, and every reuse decision it emits is additionally resolved
+against that catalog, so plans cite only modules the environment
+actually provides. \emph{Verify against the real environment}: the inner
+lint compiles exactly what the benchmark will compile, making the two
+fatal contracts visible during repair rather than at scoring, and the
+syntax-first-then-function gate ordering spends each feedback signal
+where it is most actionable. \emph{Reuse the model's own verified
+successes}: repair hints come from diffs that already fixed a
+structurally identical failure. What each commitment buys is quantified
+in Chapter~\ref{ch:06}.

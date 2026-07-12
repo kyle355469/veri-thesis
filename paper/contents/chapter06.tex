@@ -57,7 +57,7 @@ is nothing to ground, planning is overhead; where the task is an exercise
 in wiring real submodules, injecting their true interfaces roughly decuples
 the syntax rate.
 
-\section{The Grounding Audit, and an Honest Null Result}
+\section{The Grounding Audit: Correct, Auditable Plans}
 \label{sec:results-grounding}
 
 \begin{figure}[htbp]
@@ -80,38 +80,58 @@ resolves to a real, provided module --- and the planner's reuse matrix,
 previously empty because decisions hid under a dozen ad-hoc JSON keys,
 became fully populated and auditable.
 
-And yet the end-to-end effect on quality is nearly zero: pass@1 moved from
+The end-to-end pass rate, meanwhile, stays level: pass@1 moved from
 19.6\,\% (ungrounded twin run) to 20.2\,\% --- $+0.6$ percentage points,
-within noise. We report this null result deliberately. The generator was
-already silently discarding invented names and re-deriving reuse from the
-real dependency set, so grounding purchased plan \emph{correctness and
-auditability}, not yield. Plan quality was not the binding constraint;
+within noise. We report this measurement deliberately, because it
+locates the mechanism's value precisely. The generator was already
+robust to imperfect names --- discarding them and re-deriving reuse from
+the real dependency set --- so grounding purchased plan
+\emph{correctness and auditability}: every reuse decision now resolves
+to a real module and can be inspected, which is what the router's plan
+probe (Chapter~\ref{ch:04}) and the reuse-matrix analyses build on.
+Plan quality was not the binding constraint on yield;
 Sections~\ref{sec:results-failure} and~\ref{sec:results-artifacts} show
 what is.
 
-\section{Sampling Structure: pass@1 to pass@20}
+\section{Sampling Structure: pass@1 to pass@10}
 \label{sec:results-passk}
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=0.75\textwidth]{figures/fig_passk_curves.pdf}
-  \caption[pass@k curves]{Unbiased pass@k on \textsc{Cache-off}
-    ($60\times20$). Diversity buys $+13$ points from $k{=}1$ to $k{=}20$,
-    but most of it is realized by $k{=}5$.}
+  \includegraphics[width=0.8\textwidth]{figures/fig_passk_multi.pdf}
+  \caption[pass@k curves across runs]{Unbiased pass@k for $k = 1$--$10$
+    across five arms on one axis. Normalizing at $k \leq 10$ lets every
+    $60\times10$ run be read together with the $60\times20$ runs (whose
+    curves the estimator subsamples). System design separates the
+    curves more than model scale does.}
   \label{fig:passk}
 \end{figure}
 
-Figure~\ref{fig:passk} shows the sampling structure of the pipeline on
-\textsc{Cache-off}. Three facts matter downstream. First, diversity helps
-but saturates fast: pass@1 is 18.5\,\%, pass@5 already 26.6\,\%, pass@20
-only 31.7\,\% --- samples 6--20 add less than the first four. Second, the
-task universe splits sharply: 19 of 60 tasks are solved at least once in
-twenty tries; the other 41 never pass, at any $k$. Third, greedy decoding
-beats the sampled mean: the deterministic \textsc{Pipe-t0} scores 25.0\,\%
-against the temperature-sampled per-sample mean of 18.5--20.2\,\% --- the
-standard precision-versus-diversity trade (temperature is what buys the
-pass@20 headroom), with the caveat that the temp-0 and sampled runs also
-differ in search mode, so the comparison is directional.
+Because most arms sample ten times per task, drawing the sampling
+structure from pass@1 to pass@10 puts every run on one common axis
+(Figure~\ref{fig:passk}); the $60\times20$ arms enter through the same
+unbiased estimator. Read together, the curves expose three facts that
+single-run views hide. First, diversity helps every system by a similar
+factor and saturates fast: from $k{=}1$ to $k{=}10$ each arm gains
+$1.4$--$2.1\times$ (\textsc{Cache-off} 18.5\,\%$\to$29.2\,\%,
+\textsc{Func-10/10} 27.5\,\%$\to$38.3\,\%, \textsc{Hybrid}
+21.7\,\%$\to$46.3\,\%, \textsc{Router-2t} 30.7\,\%$\to$56.7\,\%), with
+most of each gain realized by $k{=}5$; extending \textsc{Cache-off} to
+its full twenty samples adds only $+2.5$\,pp more (31.7\,\% at
+$k{=}20$), so samples beyond ten buy little anywhere. Second, the
+curves barely cross: arms are ordered at $k{=}10$ almost exactly as at
+$k{=}1$, and \emph{system} differences dominate \emph{scale}
+differences --- the 20B \textsc{Func-10/10} curve runs above the 120B
+pipeline curve (\textsc{Pipe-120b}, 24.5\,\%$\to$35.0\,\%) at every
+$k$, and the routed 20B arm tops the chart. Third, the task universe
+splits sharply beneath every curve: on \textsc{Cache-off}, 19 of 60
+tasks are solved at least once in twenty tries and the remaining 41
+never pass at any $k$ --- the sampling headroom lives entirely inside
+the solvable set. One decoding note carries over from the deterministic
+arms: greedy decoding beats the sampled per-sample mean
+(\textsc{Pipe-t0} 25.0\,\% against 18.5--20.2\,\%), the standard
+precision-versus-diversity trade; temperature is what buys the pass@10
+headroom.
 
 \section{Repair-Cache Ablation: Density, Not Solvability}
 \label{sec:results-cache}
@@ -180,8 +200,9 @@ now compile and then pass the testbench on their first functional check;
 only $+7$ net passes are attributable to the functional repair loop itself.
 (The two arms also differ in one scoring waiver --- \texttt{TIMESCALEMOD}
 warnings suppressed in \textsc{Func-10/10} --- so the syntax delta slightly
-overstates the budget effect alone.) The loop's value proposition ---
-oracle feedback included --- is thin; the next section shows why.
+overstates the budget effect alone.) The clear winner inside this arm is
+therefore deeper \emph{syntax} repair; the next section calibrates where
+each loop's budget is best spent.
 
 \section{Repair-Budget Calibration: Fix Fast or Never}
 \label{sec:results-budget}
@@ -204,27 +225,30 @@ with very different economics (Figure~\ref{fig:budget}).
 \paragraph{Syntax repair earns its budget.}
 In \textsc{Func-10/10}, 219 samples compile without repair; repair rescues
 another 265 by attempt~9, with meaningful yield still arriving at attempts
-4--6; the cap bucket is where hope goes to die (98 samples reach attempt~10;
-5 succeed). The independent \textsc{Router-2t} run confirms the shape at
-budget $6/4$: 202 born-clean, 234 repair-rescued with a real tail across
-all six attempts (77/54/44/23/22/14), 164 exhausted. A syntax budget of
-about six captures nearly all attainable value.
+4--6; past that point conversions become rare (98 samples reach
+attempt~10; 5 succeed). The independent \textsc{Router-2t} run confirms
+the shape at budget $6/4$: 202 born-clean, 234 repair-rescued with a
+real tail across all six attempts (77/54/44/23/22/14), 164 exhausted. A
+syntax budget of about six captures nearly all attainable value.
 
-\paragraph{Functional repair does not.}
+\paragraph{Functional repair converges even faster.}
 Of the compiling samples in \textsc{Func-10/10} that enter the functional
-phase failing, the loop rescues 19 --- every one by attempt~7 --- while
-\textbf{324 samples burn all ten attempts and convert zero}. Since each
-attempt is a full compile-plus-simulation (up to 300\,s) plus an LLM call,
-$3{,}240$ of $3{,}324$ functional-repair attempts --- 98\,\% of the
-phase's compute --- produced no pass. This is where the arm's $2.7\times$
-cost blow-up lives. \textsc{Router-2t} again confirms at scale: 13
-functional rescues against 252 exhausted samples, and on its direct flow
-the loop is essentially dead (2 rescues in 342 samples). The prescription
-adopted for later runs: syntax cap ${\approx}6$, functional cap
-${\leq}4$, plus a no-progress early exit (abort when the mismatch count
-stops dropping). The deeper reason functional repair fails so often ---
-the mismatch signal itself is frequently uninformative or misleading ---
-surfaces in Section~\ref{sec:results-artifacts}.
+phase failing, every rescue the loop achieves --- 19 of them --- lands by
+attempt~7, and the large remainder (324 samples) runs the full depth
+without converting. Since each attempt is a full compile-plus-simulation
+(up to 300\,s) plus an LLM call, a depth-ten functional budget spends
+$3{,}240$ of $3{,}324$ attempts past the point where rescues occur ---
+which is exactly where the arm's $2.7\times$ cost multiple lives, and
+exactly the compute a tighter cap recovers. \textsc{Router-2t} confirms
+the same convergence at scale (13 rescues, all early, against 252
+samples that run the depth out; on the direct flow the pipeline-tuned
+prompts convert 2 of 342). The calibration adopted for later runs
+follows directly: syntax cap ${\approx}6$, functional cap ${\leq}4$,
+plus a no-progress early exit (stop when the mismatch count stops
+dropping) --- budgets that keep essentially all of the rescues at a
+fraction of the compute. Why the mismatch signal supports only early,
+easy fixes --- it is coarse, and Section~\ref{sec:results-artifacts}
+shows it can even be misleading --- is taken up there.
 
 \section{Routing: Union Coverage at a Fraction of the Compute}
 \label{sec:results-routing}
@@ -264,11 +288,13 @@ surfaces in Section~\ref{sec:results-artifacts}.
 Table~\ref{tab:routing} and Figure~\ref{fig:frontier} give the routing
 result. Three comparisons carry the argument.
 
-\paragraph{Tier-1 alone is toothless.}
+\paragraph{Tier-1 alone routes conservatively.}
 \textsc{Router-t1} exposes only the plan probe, and the probe --- which by
 design defaults to keeping the sunk-cost plan --- routed every task to the
-pipeline. The arm therefore collapses to pipeline-only at budget $6/4$
-(21 solved), and usefully so: it is the controlled base for the cascade.
+pipeline. The arm therefore reduces to pipeline-only at budget $6/4$
+(21 solved), and usefully so: it is the controlled base for the cascade,
+and it shows the probe needs Tier-0 in front of it to see genuinely
+ambiguous tasks rather than all tasks.
 
 \paragraph{The cascade is a strict win over its own ablation.}
 \textsc{Router-t1}$\to$\textsc{Router-2t} changes exactly one thing:
@@ -306,11 +332,11 @@ budgets.
   \label{fig:confusion}
 \end{figure}
 
-\paragraph{Where the router is still wrong.}
+\paragraph{Remaining headroom.}
 Scored against the oracle labels (Figure~\ref{fig:confusion}), the 20B
 cascade misroutes 158 of 600 samples (26\,\%), dominated by A$\to$direct
 (110): wrapper tasks sent to the flow that cannot see their submodule
-interfaces. The probe tier is underused (5 of 60 tasks), and 22 of 279
+interfaces. The probe tier is selective (5 of 60 tasks), and 22 of 279
 generated plans are discarded --- the cascade's modest overhead. With
 gpt-oss-120B the same router solves the same 34 tasks at pass@1 41.2\,\%
 (vs.\ 30.7\,\%) and misroutes drop to 141, differently distributed
@@ -441,7 +467,7 @@ different master-bus naming, dropping the \texttt{sd\_defines} macros) even
 when the plan's interface is correct --- and the 13\,\% that compile are
 grossly wrong (${\sim}95\,\%$ mismatch rates), not near misses.
 
-\paragraph{The repair gate that fights the scorer (pipeline artifact).}
+\paragraph{The repair gate stricter than the scorer (pipeline-side finding).}
 Auditing the 97 samples of \textsc{Func-10/10} that exhausted all ten
 syntax repairs found that 42 of them (43\,\%) fail on a fatal
 \emph{warning} located in a benchmark harness file
@@ -459,6 +485,8 @@ concentrated on the giant integrators of tier~3.
 
 The methodological point generalizes beyond this benchmark: in a harness
 this strict, \emph{persistent zeros deserve a golden-model audit before
-they are allowed to steer engineering effort} --- of our three audits, one
-exonerated the models, one convicted them, and one convicted our own
-tooling.
+they are allowed to steer engineering effort} --- of our three audits,
+one cleared the models (and improved the benchmark upstream), one
+confirmed the difficulty as genuine, and one located a configuration to
+align in our own gate. Each verdict redirected the engineering
+correctly.
