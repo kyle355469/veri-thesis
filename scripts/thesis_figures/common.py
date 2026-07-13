@@ -9,6 +9,7 @@ against runs/*/complete_analysis_report.md.
 from __future__ import annotations
 
 import json
+import re
 from math import comb
 from pathlib import Path
 
@@ -82,14 +83,42 @@ def save(fig, name: str) -> None:
     print(f"[saved] {path}")
 
 
-def load_records(run_dir: str, module_only: bool = True) -> list[dict]:
+# Ref-wrap detection: the direct flow's prompt leaked the benchmark's golden
+# model names (ref_<task>); samples that merely instantiate a ref_* module
+# pass by construction and are invalidated (counted as syntax- and
+# function-fail), matching runs/*/cleaned_accuracy_report.md.
+WRAP_RE = re.compile(r"^\s*(ref_\w+)\s*(?:#\s*\(|\w+\s*\(|\w+\s*$)", re.M)
+
+
+def is_ref_wrap(record: dict) -> bool:
+    path = record.get("generated_code_path")
+    if not path:
+        return False
+    fp = Path(path)
+    if not fp.is_absolute():
+        fp = REPO / path
+    try:
+        return bool(WRAP_RE.search(fp.read_text(errors="ignore")))
+    except OSError:
+        return False
+
+
+def load_records(run_dir: str, module_only: bool = True,
+                 clean_wraps: bool = True) -> list[dict]:
     recs = []
+    n_wraps = 0
     with open(RUNS / run_dir / "records.jsonl") as fh:
         for line in fh:
             r = json.loads(line)
             if module_only and r.get("task_level") not in (None, "module"):
                 continue
+            if clean_wraps and is_ref_wrap(r):
+                n_wraps += 1
+                r["passed"] = False
+                r["syntax"] = False
             recs.append(r)
+    if n_wraps:
+        print(f"[clean] {run_dir}: {n_wraps} ref-wrap samples invalidated")
     return recs
 
 

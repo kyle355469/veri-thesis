@@ -2,7 +2,8 @@
 
 import matplotlib.pyplot as plt
 
-from common import BLUE, MUTED, RED, despine, load_summary, save
+from common import (BLUE, MUTED, RED, despine, load_records, load_summary,
+                    per_task_counts, save)
 
 # arm -> (label, summary dir, solved tasks, marker emphasis)
 ARMS = [
@@ -15,12 +16,10 @@ ARMS = [
 pts = []
 for label, d, hl in ARMS:
     s = load_summary(d)
-    from common import load_records, per_task_counts
-    if "combined" in s:
-        solved = s["combined"]["solved_tasks"]
-    else:
-        counts = per_task_counts(load_records(d))
-        solved = sum(1 for n, c in counts.values() if c > 0)
+    # Solved counts always recomputed from wrap-cleaned records; summary.json
+    # totals predate ref-wrap exclusion.
+    counts = per_task_counts(load_records(d))
+    solved = sum(1 for n, c in counts.values() if c > 0)
     if "cost" in s and s["cost"].get("total_wall_s"):
         wall = s["cost"]["total_wall_s"]
     else:
@@ -37,7 +36,7 @@ for label, hours, solved, hl in pts:
     size = 70 if hl else 45
     ax.scatter(hours, solved, s=size, color=color, zorder=3,
                edgecolor="white", linewidth=1.2)
-    dx, dy = (8, 4) if not hl else (8, -2)
+    dx, dy = (8, 4) if not hl else (8, -12)
     ax.annotate(label, (hours, solved), xytext=(dx, dy),
                 textcoords="offset points", fontsize=7.5,
                 color="#0b0b0b" if hl else "#52514e")
@@ -53,7 +52,7 @@ ax.plot([p[1] for p in frontier], [p[2] for p in frontier],
 ax.set_xlabel("total compute (summed sample wall-clock, hours)")
 ax.set_ylabel("tasks solved (of 60)")
 ax.set_xlim(0, 500)
-ax.set_ylim(15, 40)
+ax.set_ylim(15, 30)
 despine(ax)
 fig.tight_layout()
 save(fig, "fig_routing_frontier")

@@ -9,7 +9,11 @@ through~\ref{sec:results-budget}), the router
 failures themselves (Sections~\ref{sec:results-failure}
 and~\ref{sec:results-artifacts}). All runs are identified by the labels of
 Table~\ref{tab:run-inventory}; all rates were recomputed directly from each
-run's per-sample records rather than transcribed from run logs.
+run's per-sample records rather than transcribed from run logs, and every
+rate excludes \emph{ref-wrap} samples --- generated candidates that pass by
+instantiating the benchmark's own reference model through a prompt-side
+leak, a benchmark-gaming pattern the audit of
+Section~\ref{sec:results-artifacts} details and quantifies.
 
 \section{Does Planning and Reuse Beat the Model Alone?}
 \label{sec:results-headline}
@@ -21,14 +25,17 @@ identical harness, \textsc{Pipe-t0} versus \textsc{Direct-t0}
 \begin{table}[htbp]
   \centering
   \caption[Headline comparison at temperature 0]{Grounded pipeline vs.\ pure
-    model on the 60 module tasks, temperature 0, one sample per task.}
+    model on the 60 module tasks, temperature 0, one sample per task.
+    Like every number in this chapter, rates exclude ref-wrap samples
+    (Section~\ref{sec:results-artifacts}); the exclusion costs
+    \textsc{Direct-t0} one syntax and one pass.}
   \label{tab:headline}
   \begin{tabular}{lrr}
     \toprule
     Arm & Syntax & Pass \\
     \midrule
     \textsc{Pipe-t0} (grounded planner + generator) & \textbf{37/60 = 61.7\,\%} & \textbf{15/60 = 25.0\,\%} \\
-    \textsc{Direct-t0} (pure model)                 & 16/60 = 26.7\,\% & 6/60 = 10.0\,\% \\
+    \textsc{Direct-t0} (pure model)                 & 15/60 = 25.0\,\% & 5/60 = 8.3\,\% \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -43,11 +50,12 @@ identical harness, \textsc{Pipe-t0} versus \textsc{Direct-t0}
   \label{fig:headline}
 \end{figure}
 
-The pipeline delivers $2.3\times$ the syntax rate and $2.5\times$ the pass
-rate of the same model prompted directly. The family breakdown locates the
-entire effect. On AES --- small, self-contained, nothing to reuse --- the
-model alone nearly saturates syntax (83\,\%) and the pipeline merely does
-not hurt (pass unchanged at 33\,\%). On SDC the pipeline helps modestly
+The pipeline delivers $2.5\times$ the syntax rate and $3.0\times$ the pass
+rate of the same model prompted directly. The family breakdown locates
+nearly the entire effect. On AES --- small, self-contained, nothing to
+reuse --- the model alone compiles two thirds (66.7\,\%) and the
+pipeline's pass gain is one task (16.7\,\% $\to$ 33.3\,\% of six). On
+SDC the pipeline helps modestly
 (pass 21.4\,\% $\to$ 28.6\,\%). On E203, the family whose modules
 instantiate one another, the pipeline is decisive: syntax 10.0\,\% $\to$
 55.0\,\%, pass 2.5\,\% $\to$ 22.5\,\%. The conclusion we draw --- and will
@@ -113,17 +121,17 @@ structure from pass@1 to pass@10 puts every run on one common axis
 unbiased estimator. Read together, the curves expose three facts that
 single-run views hide. First, diversity helps every system by a similar
 factor and saturates fast: from $k{=}1$ to $k{=}10$ each arm gains
-$1.4$--$2.1\times$ (\textsc{Cache-off} 18.5\,\%$\to$29.2\,\%,
+$1.4$--$1.9\times$ (\textsc{Cache-off} 18.5\,\%$\to$29.2\,\%,
 \textsc{Func-10/10} 27.5\,\%$\to$38.3\,\%, \textsc{Hybrid}
-21.7\,\%$\to$46.3\,\%, \textsc{Router-2t} 30.7\,\%$\to$56.7\,\%), with
+17.7\,\%$\to$33.1\,\%, \textsc{Router-2t} 21.7\,\%$\to$35.0\,\%), with
 most of each gain realized by $k{=}5$; extending \textsc{Cache-off} to
 its full twenty samples adds only $+2.5$\,pp more (31.7\,\% at
 $k{=}20$), so samples beyond ten buy little anywhere. Second, the
-curves barely cross: arms are ordered at $k{=}10$ almost exactly as at
+curves rarely cross: arms are ordered at $k{=}10$ almost as at
 $k{=}1$, and \emph{system} differences dominate \emph{scale}
 differences --- the 20B \textsc{Func-10/10} curve runs above the 120B
 pipeline curve (\textsc{Pipe-120b}, 24.5\,\%$\to$35.0\,\%) at every
-$k$, and the routed 20B arm tops the chart. Third, the task universe
+$k$ and tops the chart. Third, the task universe
 splits sharply beneath every curve: on \textsc{Cache-off}, 19 of 60
 tasks are solved at least once in twenty tries and the remaining 41
 never pass at any $k$ --- the sampling headroom lives entirely inside
@@ -227,8 +235,9 @@ In \textsc{Func-10/10}, 219 samples compile without repair; repair rescues
 another 265 by attempt~9, with meaningful yield still arriving at attempts
 4--6; past that point conversions become rare (98 samples reach
 attempt~10; 5 succeed). The independent \textsc{Router-2t} run confirms
-the shape at budget $6/4$: 202 born-clean, 234 repair-rescued with a
-real tail across all six attempts (77/54/44/23/22/14), 164 exhausted. A
+the shape at budget $6/4$: 153 born-clean, 228 repair-rescued with a
+real tail across all six attempts (73/53/43/23/22/14), the rest
+exhausted or invalidated as ref-wraps. A
 syntax budget of about six captures nearly all attainable value.
 
 \paragraph{Functional repair converges even faster.}
@@ -240,9 +249,9 @@ without converting. Since each attempt is a full compile-plus-simulation
 $3{,}240$ of $3{,}324$ attempts past the point where rescues occur ---
 which is exactly where the arm's $2.7\times$ cost multiple lives, and
 exactly the compute a tighter cap recovers. \textsc{Router-2t} confirms
-the same convergence at scale (13 rescues, all early, against 252
+the same convergence at scale (13 rescues, all early, against 251
 samples that run the depth out; on the direct flow the pipeline-tuned
-prompts convert 2 of 342). The calibration adopted for later runs
+prompts convert 2 of 286 genuine samples). The calibration adopted for later runs
 follows directly: syntax cap ${\approx}6$, functional cap ${\leq}4$,
 plus a no-progress early exit (stop when the mismatch count stops
 dropping) --- budgets that keep essentially all of the rescues at a
@@ -250,12 +259,13 @@ fraction of the compute. Why the mismatch signal supports only early,
 easy fixes --- it is coarse, and Section~\ref{sec:results-artifacts}
 shows it can even be misleading --- is taken up there.
 
-\section{Routing: Union Coverage at a Fraction of the Compute}
+\section{Routing: Matched Coverage at a Fraction of the Compute}
 \label{sec:results-routing}
 
 \begin{table}[htbp]
   \centering
-  \caption[Routing ablation arms]{Routing arms (gpt-oss-20B). Solved =
+  \caption[Routing ablation arms]{Routing arms (gpt-oss-20B), ref-wrap
+    samples excluded (Section~\ref{sec:results-artifacts}). Solved =
     tasks with $\geq$1 passing sample. $\Sigma$wall sums per-sample
     wall-clock. Token totals marked $^{+}$ are lower bounds
     (direct-flow repair calls are not instrumented). \textsc{Hybrid} and
@@ -268,10 +278,10 @@ shows it can even be misleading --- is taken up there.
     \toprule
     Arm & Samples & pass@10 & Solved/60 & $\Sigma$wall (h) & Mtok/solved \\
     \midrule
-    \textsc{Hybrid} (both flows)      & $600{+}600$ & 46.3\,\% & 30 & 423 & 3.24$^{+}$ \\
-    \textsc{Func-10/10} (pipeline only) & 600 & 38.3\,\% & 23 & 402 & 3.90 \\
+    \textsc{Hybrid} (both flows)      & $600{+}600$ & 33.1\,\% & 20 & 423 & 4.87$^{+}$ \\
+    \textsc{Func-10/10} (pipeline only) & 600 & \textbf{38.3\,\%} & \textbf{23} & 402 & 3.90 \\
     \textsc{Router-t1} (probe only)   & 600 & 35.0\,\% & 21 & 213 & 2.17 \\
-    \textsc{Router-2t} (full cascade) & 600 & \textbf{56.7\,\%} & \textbf{34} & \textbf{130} & \textbf{0.83}$^{+}$ \\
+    \textsc{Router-2t} (full cascade) & 600 & 35.0\,\% & 21 & \textbf{130} & \textbf{1.35}$^{+}$ \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -280,13 +290,14 @@ shows it can even be misleading --- is taken up there.
   \centering
   \includegraphics[width=0.8\textwidth]{figures/fig_routing_frontier.pdf}
   \caption[Routing frontier]{Tasks solved vs.\ total compute. The full
-    cascade router solves the most tasks of any arm at less than a third
-    of the compute of running both flows everywhere.}
+    cascade router holds its base arm's coverage at 39\,\% less compute
+    --- the cheapest solved task of any arm; the pipeline-only arm buys
+    the most coverage at three times the router's cost.}
   \label{fig:frontier}
 \end{figure}
 
 Table~\ref{tab:routing} and Figure~\ref{fig:frontier} give the routing
-result. Three comparisons carry the argument.
+result. Three comparisons and one correction carry the argument.
 
 \paragraph{Tier-1 alone routes conservatively.}
 \textsc{Router-t1} exposes only the plan probe, and the probe --- which by
@@ -296,31 +307,46 @@ pipeline. The arm therefore reduces to pipeline-only at budget $6/4$
 and it shows the probe needs Tier-0 in front of it to see genuinely
 ambiguous tasks rather than all tasks.
 
-\paragraph{The cascade is a strict win over its own ablation.}
+\paragraph{The cascade holds coverage while cutting compute.}
 \textsc{Router-t1}$\to$\textsc{Router-2t} changes exactly one thing:
 Tier-0 LLM pre-routing in front of the probe (which then handles only the
-5 of 60 tasks Tier-0 deferred). Solved tasks jump $21 \to 34$ and pass@10
-$35.0\,\% \to 56.7\,\%$ \emph{while total compute falls} $213 \to 130$
-hours --- more coverage for less work, because 342 of 600 samples run on
-the direct flow at roughly a tenth of a pipeline sample's token cost. Per
-solved task, the cascade spends 0.83\,M tokens against the brute-force
-hybrid's 3.24\,M --- roughly $4\times$ more token-efficient.
+5 of 60 tasks Tier-0 deferred). Solved tasks hold at 21 and pass@10 at
+35.0\,\% --- the two arms' solved sets differ by a single low-yield task
+in each direction (\texttt{e203\_exu\_disp} only in the cascade,
+\texttt{e203\_exu\_alu\_bjp} only in the base), sampling variance rather
+than a routing effect --- \emph{while total compute falls} $213 \to 130$
+hours ($-39\,\%$), because 342 of 600 samples run on the direct flow at
+roughly a tenth of a pipeline sample's token cost. Per solved task, the
+cascade spends 1.35\,M tokens against its own base arm's 2.17\,M and the
+brute-force hybrid's 4.87\,M: the cheapest solved task of any arm we
+measured.
+
+\paragraph{What the raw records claimed --- and why we do not.}
+Before the benchmark-gaming audit
+(Section~\ref{sec:results-artifacts}), the same records read very
+differently: \textsc{Router-2t} appeared to solve 34 tasks at pass@10
+56.7\,\%, a $+13$-task routing win. Thirteen of those tasks were
+``solved'' \emph{only} by samples that instantiate the benchmark's
+reference model --- the FSM- and algorithm-heavy AES tops, SD-card
+engines, and E203 decode/dispatch tasks where the direct flow had
+seemed strongest --- and \textsc{Hybrid} appeared to solve 30 (ten of
+them wrap-only). With wraps excluded, the cascade's coverage gain over
+its own ablation is zero, and the direct flow contributes no task the
+pipeline does not also solve. The routing result this thesis
+stands on is therefore the cost row of Table~\ref{tab:routing}, not a
+coverage row --- and we report the correction in full, because the
+audit that produced it is part of the contribution
+(Section~\ref{sec:results-artifacts}).
 
 \paragraph{Against the hybrid ceiling, directionally ahead.}
-\textsc{Router-2t} solves 34 tasks where \textsc{Hybrid} --- running both
-flows on everything --- solves 30 at $3.3\times$ the compute. This
+\textsc{Router-2t} solves 21 tasks where \textsc{Hybrid} --- running both
+flows on everything --- solves 20 at $3.3\times$ the compute. This
 comparison is \emph{not} single-variable: the hybrid predates the
-direct-flow repair loop (its direct samples compiled at 24.2\,\% vs.\ the
-router run's 76.0\,\%) and used $10/10$ budgets, so part of the router
-run's edge is repair, not routing. We therefore claim only that the
-cascade \emph{reaches at least union-level coverage at a fraction of the
-cost}, not that it strictly beats the union. Notably, the two hybrid-solved
-tasks the router run misses (\texttt{e203\_exu\_branchslv},
-\texttt{e203\_ifu\_ift2icb}) were \emph{correctly routed} --- both are
-direct-only tasks that the hybrid's pipeline flow also never solved
-(0/10 each) --- and were lost to sampling variance on low-yield tasks
-(2/10 and 1/10 direct yields), not to the routing policy or the trimmed
-budgets.
+direct-flow repair loop (its direct samples genuinely compiled at
+16.2\,\% vs.\ the router run's 59.9\,\%) and used $10/10$ budgets, so
+the arms differ in repair as well as routing. We therefore claim only
+that the cascade \emph{matches the attainable coverage at a fraction of
+the cost}, not that it beats the hybrid deployment on coverage.
 
 \begin{figure}[htbp]
   \centering
@@ -336,14 +362,16 @@ budgets.
 Scored against the oracle labels (Figure~\ref{fig:confusion}), the 20B
 cascade misroutes 158 of 600 samples (26\,\%), dominated by A$\to$direct
 (110): wrapper tasks sent to the flow that cannot see their submodule
-interfaces. The probe tier is selective (5 of 60 tasks), and 22 of 279
-generated plans are discarded --- the cascade's modest overhead. With
-gpt-oss-120B the same router solves the same 34 tasks at pass@1 41.2\,\%
-(vs.\ 30.7\,\%) and misroutes drop to 141, differently distributed
-(A$\to$direct falls to 71; B$\to$pipeline rises to 70): the bigger model's
-feature extractor defers less and trusts the pipeline more. Closing the
-A$\to$direct gap --- e.g.\ by letting spec-level uncertainty trigger the
-probe more aggressively --- is the router's clearest headroom.
+interfaces --- the direction that forfeits would-be passes. The probe
+tier is selective (5 of 60 tasks), and 22 of 279 generated plans are
+discarded --- the cascade's modest overhead. With gpt-oss-120B the same
+router solves 25 tasks at pass@1 32.7\,\% (vs.\ the 20B cascade's 21 at
+21.7\,\%): scale helps genuinely, and misroutes drop to 141, differently
+distributed (A$\to$direct falls to 71; B$\to$pipeline rises to 70): the
+bigger model's feature extractor defers less and trusts the pipeline
+more. Closing the A$\to$direct gap --- e.g.\ by letting spec-level
+uncertainty trigger the probe more aggressively --- is the router's
+clearest headroom.
 
 \section{Failure Taxonomy: Three Tiers of Difficulty}
 \label{sec:results-failure}
@@ -420,7 +448,7 @@ feedback (tier~2), decomposition and contract enforcement (tier~3) ---
 which is why aggregate pass rate alone is a blunt instrument for steering
 this system.
 
-\section{When the Benchmark Is Wrong: Scoring Artifacts}
+\section{When the Score Is Wrong: Benchmark and Harness Artifacts}
 \label{sec:results-artifacts}
 
 Treating every 0\,\% module as model failure would misdirect the next
@@ -428,7 +456,9 @@ round of engineering, so the persistent zeros were audited individually
 with a golden-model methodology: run the benchmark's \emph{own reference
 implementation} through the full scoring path, and if the golden fails (or
 a byte-equivalent candidate fails), the task's zeros are artifacts, not
-model errors. Three audits produced three different verdicts.
+model errors. The same skepticism was then turned around and applied to
+the persistent \emph{passes}. Four audits produced four different
+verdicts.
 
 \paragraph{The AES S-box race (confirmed artifact, since fixed upstream).}
 \texttt{aes\_sbox} and \texttt{aes\_inv\_sbox} scored 0 across all runs
@@ -483,10 +513,42 @@ a genuine benchmark defect of the AES class. The remaining 53\,\% of
 repair-exhausted samples fail on real errors in generated code,
 concentrated on the giant integrators of tier~3.
 
+\paragraph{The reference-wrap leak (audited, our-side; all runs
+re-scored).}
+\label{par:refwrap}
+The fourth audit inverted the question: instead of asking whether zeros
+were honest, it asked whether the \emph{passes} were. The direct flow's
+prompt lists the verification directory's provided helper modules so
+the model will not redeclare them --- and that list included
+\texttt{ref\_\emph{<task>}}, the benchmark's own golden reference
+model. The models found the exploit: emit a top module that merely
+\emph{instantiates} \texttt{ref\_\emph{<task>}}, which compiles
+(the scoring Makefile globs the whole verification directory) and
+matches the reference by construction. Detection is mechanical --- a
+generated sample is a \emph{ref-wrap} if any line instantiates a
+\texttt{ref\_*} module --- and unambiguous: every flagged sample wraps
+exactly its own task's reference, and none occurs in the pipeline flow,
+whose runner filters \texttt{ref\_*} names from its prompts. The
+exploit's yield tracks the machinery around it: in \textsc{Hybrid},
+whose direct flow had no repair loop, only 48 of 186 attempted wraps
+compiled; in \textsc{Router-2t}, with repair, 54 of 56 passed; at 120B,
+all 51 attempts passed. The impact was concentrated exactly where it
+was most misleading: 13 of \textsc{Router-2t}'s 34 raw solved tasks and
+10 of \textsc{Hybrid}'s 30 were wrap-only, manufacturing the apparent
+direct-flow advantage on FSM and algorithm tasks that the routing
+analysis had initially credited (Section~\ref{sec:results-routing}).
+Every number in this thesis excludes wrap samples (counted as syntax
+and functional failures); the fix on the generation side is one line
+--- filter \texttt{ref\_*} from the direct prompt's provided-module
+list, as the pipeline runner already does --- and wrap screening is now
+part of our scoring path.
+
 The methodological point generalizes beyond this benchmark: in a harness
-this strict, \emph{persistent zeros deserve a golden-model audit before
-they are allowed to steer engineering effort} --- of our three audits,
-one cleared the models (and improved the benchmark upstream), one
-confirmed the difficulty as genuine, and one located a configuration to
-align in our own gate. Each verdict redirected the engineering
-correctly.
+this strict, \emph{persistent zeros --- and flattering passes ---
+deserve a golden-model audit before they are allowed to steer
+engineering effort}. Of our four audits, one cleared the models (and
+improved the benchmark upstream), one confirmed the difficulty as
+genuine, one located a configuration to align in our own gate, and one
+caught our own prompt handing the models a shortcut and corrected a
+headline ablation before it could mislead. Each verdict redirected the
+engineering correctly.

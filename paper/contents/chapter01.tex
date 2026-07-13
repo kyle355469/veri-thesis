@@ -31,7 +31,7 @@ against~\citep{liu2023verilogeval, lu2024rtllm}. When we instead evaluate
 on RealBench~\citep{realbench2025} --- 60 module-level tasks carved from
 three real IP projects, scored by a strict compile-and-simulate harness
 --- a capable open-weight model prompted directly compiles on only
-26.7\,\% of tasks and passes 10.0\,\%. The gap between that number and
+25.0\,\% of tasks and passes 8.3\,\%. The gap between that number and
 usefulness is the subject of this thesis. Our premise is that the gap is
 less about model intelligence than about the \emph{system} around the
 model: whether it is told what already exists, held to the environment's
@@ -69,7 +69,7 @@ it.
 \section{Contributions}
 \label{sec:intro-contributions}
 
-This thesis makes three contributions, each evaluated on the same
+This thesis makes four contributions, each evaluated on the same
 60-task benchmark under controlled ablations.
 
 \begin{enumerate}
@@ -81,7 +81,7 @@ This thesis makes three contributions, each evaluated on the same
     modules the environment actually provides, followed by a generator
     operating under environment-faithful verification and repair. At
     temperature~0 the pipeline passes 25.0\,\% of tasks against the
-    same model's direct 10.0\,\% ($2.5\times$; syntax $2.3\times$),
+    same model's direct 8.3\,\% ($3.0\times$; syntax $2.5\times$),
     with the entire gain concentrated in the reuse-rich processor-core
     family (Section~\ref{sec:results-headline}).
   \item \textbf{A cascade router between generation flows}
@@ -89,9 +89,10 @@ This thesis makes three contributions, each evaluated on the same
     pre-routing plus a plan probe for the uncertain residue --- that
     sends integration-shaped tasks to the pipeline and self-contained
     algorithmic tasks to a cheap direct flow. In its controlled ablation
-    it raises solved tasks from 21 to 34 of 60 \emph{while reducing}
-    total compute from 213 to 130 hours, and reaches $4\times$ the
-    token efficiency per solved task of brute-forcing both flows
+    it holds coverage at its base arm's 21 of 60 solved tasks
+    \emph{while reducing} total compute from 213 to 130 hours and
+    per-solved-task token cost from 2.17\,M to 1.35\,M --- the
+    cheapest coverage of any measured arm
     (Section~\ref{sec:results-routing}).
   \item \textbf{Controlled measurements of the supporting machinery}
     (Chapter~\ref{ch:06}): a semantic repair cache that lifts syntax
@@ -102,13 +103,24 @@ This thesis makes three contributions, each evaluated on the same
     compute; and a functional repair loop reported as its own
     experimental arm because its feedback signal is the scoring oracle
     --- an accounting line this literature rarely draws.
+  \item \textbf{A benchmark- and harness-artifact audit methodology}
+    (Section~\ref{sec:results-artifacts}): golden implementations run
+    through the full scoring path to adjudicate persistent zeros, and a
+    screen of generated RTL for benchmark-gaming patterns. The audits
+    uncovered a testbench race that scored byte-perfect S-box
+    implementations as total failures (root-caused and fixed upstream
+    in the benchmark), confirmed other zeros as genuine difficulty,
+    aligned our own repair gate with the scorer --- and caught a
+    prompt-side leak that let directly-prompted samples pass by merely
+    instantiating the benchmark's reference models, an exclusion now
+    applied to every number in this thesis.
 \end{enumerate}
 
 Throughout, every claim is tied to a controlled comparison, and results
 are reported with the same care whether they move the headline metric or
-locate exactly where the next gain must come from --- the grounding pass
-that made every plan auditable is, we argue, as informative as the
-router's $+13$ tasks.
+correct it --- the audit that caught a benchmark-gaming pattern in our
+own direct-flow samples is, we argue, as informative as any number it
+revised.
 
 \section{Thesis Organization}
 \label{sec:intro-organization}

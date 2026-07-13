@@ -224,3 +224,9 @@ using the larger $10/10$ budgets; Section~\ref{sec:results-routing}
 therefore treats \textsc{Router-t1} $\to$ \textsc{Router-2t} as the only
 single-variable routing comparison and labels the comparison against
 \textsc{Hybrid} as directional.
+
+One scoring rule applies to every run with a direct flow: samples whose
+generated RTL merely instantiates a leaked \texttt{ref\_*} reference
+model are invalidated --- counted as syntax and functional failures ---
+before any rate is computed. Section~\ref{sec:results-artifacts}
+documents the leak, the detector, and the per-run impact.

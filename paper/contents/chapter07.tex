@@ -12,8 +12,9 @@ verification and repair} --- compiling against the real file set,
 injecting the testbench port contract, and condensing giant specs took the
 pipeline from low-single-digit to ${\sim}18$--25\,\% pass, the single
 largest step in the project's history; (2)~\emph{routing} --- matching
-task character to flow shape lifted solved tasks from 21 to 34 while
-\emph{cutting} compute by 39\,\% (Section~\ref{sec:results-routing});
+task character to flow shape held coverage while \emph{cutting} compute
+by 39\,\% and per-solved-task tokens by roughly 40\,\%
+(Section~\ref{sec:results-routing});
 (3)~\emph{model scale} --- $6\times$ parameters bought $+9$\,pp syntax and
 $+4$\,pp pass@1 with the system held fixed; (4)~\emph{repair caching} ---
 $+5$--$7$\,pp syntax, density only. Smaller on the headline metric but
@@ -38,17 +39,22 @@ decision. We suspect this pattern --- \emph{make correctness a property
 of the harness, layered over rather than delegated to the model's
 tool-use behavior} --- transfers well beyond RTL.
 
-\paragraph{Why routing works here.}
+\paragraph{Why routing pays here.}
 The routing literature mostly buys quality with compute along one axis
-(small model vs.\ large model). Our setting is different in kind: the two
-flows have \emph{non-nested} competence sets, so the expensive flow does
-not dominate and a router can beat \emph{both} single-flow deployments at
-once --- more coverage than either, at far less compute than running both.
-We expect this shape to recur wherever an elaborate agentic scaffold
-coexists with a cheap direct path: the scaffold helps structured,
-integration-heavy instances and actively hurts self-contained ones, so
-the routing signal (does this task's difficulty live in its interfaces or
-in its logic?) is legible from the specification itself.
+(small model vs.\ large model). Our setting is different in kind: the
+expensive flow's competence subsumes the cheap flow's, but the two
+differ by an order of magnitude in cost per sample, and the scaffold
+that makes the expensive flow strong on integration-heavy instances is
+measurably counterproductive on self-contained ones
+(Section~\ref{sec:router-motivation}) --- so routing to the cheap path
+loses nothing there and saves nearly everything. We expect this shape
+to recur wherever an elaborate agentic scaffold coexists with a cheap
+direct path, because the routing signal (does this task's difficulty
+live in its interfaces or in its logic?) is legible from the
+specification itself. The corollary from our audit is equally general:
+when a cheap flow suddenly looks \emph{more able} than the scaffold ---
+rather than merely cheaper --- that is a claim worth auditing before it
+is banked (Section~\ref{sec:results-artifacts}).
 
 \paragraph{The functional ceiling.}
 The binding constraint at the end of this work is unambiguous:
@@ -72,8 +78,10 @@ this thesis; each was also flagged inline where it bites.
   \item \textbf{Single-seed runs.} Temperature-0 arms are one sample per
     task; each sampled run is one seed. Cross-run deltas under
     ${\sim}2$--3\,pp are compatible with sampling noise. The claims we
-    rest weight on (headline $2.5\times$; routing $+13$ tasks at $-39\,\%$
-    compute; the flat pass@20) are far outside that band.
+    rest weight on (headline $3.0\times$; routing $-39\,\%$ compute at
+    matched coverage; the flat pass@20) are far outside that band ---
+    the routing arms' one-task set differences are inside it and are
+    treated as noise.
   \item \textbf{Cross-run configuration drift.} Only three comparisons
     are single-variable: the cache trio, the temp-0 head-to-head, and
     \textsc{Router-t1}$\to$\textsc{Router-2t}. Everything else ---
@@ -86,8 +94,9 @@ this thesis; each was also flagged inline where it bites.
     full-run token cost is \textsc{Cache-off}'s 46.3\,M. Direct-flow
     repair calls are not instrumented, so direct-flow token totals ---
     including \textsc{Router-2t}'s 28.3\,M --- are lower bounds; the
-    per-solved-task efficiency ratios in Table~\ref{tab:routing} would
-    shrink somewhat, not reverse, under full instrumentation.
+    per-solved-task advantage in Table~\ref{tab:routing} (1.35\,M vs.\
+    the base arm's measured 2.17\,M) would shrink somewhat, not
+    reverse, under full instrumentation.
     Wall-clock is never compared across days (shared server, varying
     load).
   \item \textbf{pass@k independence.} The run-scoped cache couples a
@@ -102,6 +111,16 @@ this thesis; each was also flagged inline where it bites.
     repaired upstream on June~25,~2026, after our report. Every run in
     this thesis predates the fix except where stated; no comparison
     spans the boundary on \texttt{aes\_sbox}/\texttt{aes\_inv\_sbox}.
+  \item \textbf{Ref-wrap exclusion.} All rates exclude samples that
+    instantiate a leaked \texttt{ref\_*} reference model
+    (Section~\ref{sec:results-artifacts}). Detection is a syntactic
+    screen over generated RTL; it flagged only unambiguous
+    self-wraps and cannot, by construction, catch subtler uses of the
+    leaked \emph{name} --- though the reference \emph{source} was never
+    visible to the models, bounding what a subtler exploit could copy.
+    The direct-flow prompt retains the leak in the archived runs; the
+    definitive control is a re-run with the filtered prompt
+    (Section~\ref{sec:future}).
   \item \textbf{Oracle feedback.} The functional repair loop consumes
     the scoring testbench's mismatch report. Its passes mean
     ``specification plus oracle feedback'' and are quarantined in
@@ -147,9 +166,11 @@ decomposition with per-node oracles, reserved for the scale-limited tier
 where it pays, and the natural first customer of the
 testbench-generation direction above. \emph{Fifth}, hardening the
 router: the dominant misroute (A$\to$direct) argues for widening the
-uncertainty band that triggers the plan probe, and multi-seed
-replication would move the routing result from strongly suggestive to
-statistically settled.
+uncertainty band that triggers the plan probe; a replication with the
+\texttt{ref\_*}-filtered direct prompt is the definitive control for
+the ref-wrap exclusion of Section~\ref{sec:results-artifacts}; and
+multi-seed replication would move the routing result from strongly
+suggestive to statistically settled.
 
 \section{Conclusion}
 \label{sec:conclusion}
@@ -160,12 +181,13 @@ models --- can push LLM-based RTL generation on a realistic,
 reuse-dominated benchmark. The answer is: substantially, and measurably.
 A two-stage pipeline that plans IP reuse against a grounded per-task
 catalog and generates under environment-faithful verification reaches
-$2.3\times$ the syntax rate and $2.5\times$ the pass rate of the same
+$2.5\times$ the syntax rate and $3.0\times$ the pass rate of the same
 model prompted directly, with the entire gain concentrated where reuse
 exists to be exploited. A two-tier cascade router that matches task
-character to generation flow solves 34 of 60 tasks --- more than running
-both flows on everything --- at less than a third of the brute-force
-compute and $4\times$ better token efficiency per solved task.
+character to generation flow holds that coverage --- matching its
+pipeline-only base arm task for task --- at 39\,\% less compute and
+the lowest token cost per solved task of any arm measured, less than a
+third of the brute-force deployment's.
 
 The thesis's second kind of contribution is measurement discipline over
 the same system: grounding made every plan correct and auditable;
@@ -173,9 +195,11 @@ caching concentrated passing density inside solvable tasks; the repair
 budgets were calibrated to where the rescues actually happen, recovering
 the large majority of the functional phase's compute; and a golden-model
 audit of persistent zeros cleared the models on two tasks, aligned our
-own repair gate with the scorer on four, and confirmed the benchmark
-sound on the rest --- findings that redirected the engineering each
-time, and one of which was adopted upstream by the benchmark itself. The frontier, at the end, is not
+own repair gate with the scorer on four, confirmed the benchmark
+sound on the rest --- and, turned on our own passes, caught a
+prompt-side leak that had inflated the routing ablation and corrected
+it before it could mislead. These findings redirected the engineering
+each time, and one was adopted upstream by the benchmark itself. The frontier, at the end, is not
 syntax, not plans, and not scale: it is functional correctness, and the
 next system to move it will be the one that finds its models a better
 feedback signal than a mismatch count.
