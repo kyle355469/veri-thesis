@@ -100,25 +100,23 @@ command/data engines and FIFOs (\texttt{sd\_cmd\_master},
   \label{tab:flow-sets}
   \small
   \setlength{\tabcolsep}{5pt}
-  \begin{tabular}{lll}
+  \begin{tabular}{@{}l
+      >{\raggedright\arraybackslash}p{0.33\textwidth}
+      >{\raggedright\arraybackslash}p{0.38\textwidth}@{}}
     \toprule
      & Pipeline-only (8 tasks) & Direct-only (10 tasks) \\
     \midrule
     Members &
-      \begin{tabular}[t]{@{}l@{}}
-        \texttt{e203\_srams}, \texttt{e203\_itcm\_ram},\\
-        \texttt{e203\_dtcm\_ram}, \texttt{e203\_exu\_regfile},\\
-        \texttt{e203\_exu\_alu\_csrctrl},\\
-        \texttt{e203\_exu\_alu\_rglr}, \texttt{e203\_ifu},\\
-        \texttt{e203\_ifu\_minidec}
-      \end{tabular} &
-      \begin{tabular}[t]{@{}l@{}}
-        \texttt{aes\_cipher\_top}, \texttt{aes\_inv\_cipher\_top},\\
-        \texttt{e203\_exu\_decode}, \texttt{e203\_exu\_branchslv},\\
-        \texttt{e203\_exu\_alu\_lsuagu}, \texttt{e203\_ifu\_ift2icb},\\
-        \texttt{sd\_cmd\_master}, \texttt{sd\_cmd\_serial\_host},\\
-        \texttt{sd\_rx\_fifo}, \texttt{sd\_tx\_fifo}
-      \end{tabular} \\
+      \texttt{e203\_srams}, \texttt{e203\_itcm\_ram},
+      \texttt{e203\_dtcm\_ram}, \texttt{e203\_exu\_regfile},
+      \texttt{e203\_exu\_alu\_csrctrl},
+      \texttt{e203\_exu\_alu\_rglr}, \texttt{e203\_ifu},
+      \texttt{e203\_ifu\_minidec} &
+      \texttt{aes\_cipher\_top}, \texttt{aes\_inv\_cipher\_top},
+      \texttt{e203\_exu\_decode}, \texttt{e203\_exu\_branchslv},
+      \texttt{e203\_exu\_alu\_lsuagu}, \texttt{e203\_ifu\_ift2icb},
+      \texttt{sd\_cmd\_master}, \texttt{sd\_cmd\_serial\_host},
+      \texttt{sd\_rx\_fifo}, \texttt{sd\_tx\_fifo} \\
     \midrule
     Code lines        & 62 / 68 / 36--156          & 210 / 294 / 51--895 \\
     Spec size (chars) & 5.4k / 6.8k / 3.6k--15k    & 11.7k / 15.6k / 5k--35k \\

@@ -130,7 +130,7 @@ scores the fit, and only then commits the submodule to a reuse decision.
 
 \paragraph{Reuse or new RTL.}
 The per-module decision between \texttt{selected\_ip} and
-\texttt{new\_rtl\_required} is the plan's load-bearing output, and its
+\texttt{new\_rtl\_\allowbreak required} is the plan's load-bearing output, and its
 two error directions cost very differently. Declaring reuse of a module
 that does not fit (or does not exist under that name) plants a fatal
 seed downstream: the generator either re-implements a shipped dependency
@@ -320,6 +320,7 @@ at a fraction of the full-specification token cost per attempt.
 
 \begin{figure}[htbp]
   \centering
+  \resizebox{\textwidth}{!}{%
   \begin{tikzpicture}[
       font=\small,
       node distance=7mm and 10mm,
@@ -334,27 +335,27 @@ at a fraction of the full-specification token cost per attempt.
     \node[ctx] (plan) {adapted plan\\+ reused-IP sources};
     \node[ctx, below=4mm of plan] (iface) {interface slice\\+ DUT port contract};
     \node[ctx, below=4mm of iface] (behav) {behavior slice};
-    \node[box, right=12mm of iface] (llm) {generator /\\repair LLM};
-    \node[box, right=12mm of llm] (rtl) {RTL\\candidate};
-    \node[gate, above right=2mm and 12mm of rtl] (lint) {Verilator lint\\(benchmark file set)};
-    \node[gate, below right=2mm and 12mm of rtl] (tb) {testbench\\simulation};
-    \node[box, above=9mm of llm] (cache) {semantic repair cache\\(verified diagnostic$\to$diff hints)};
+    \node[box, right=10mm of iface] (llm) {generator /\\repair LLM};
+    \node[box, right=10mm of llm] (rtl) {RTL\\candidate};
+    \node[gate, above right=2mm and 10mm of rtl] (lint) {Verilator lint\\(benchmark file set)};
+    \node[gate, below right=2mm and 10mm of rtl] (tb) {testbench\\simulation};
+    \node[box, above=14mm of llm, xshift=9mm] (cache) {semantic repair cache\\(verified diagnostic$\to$diff hints)};
     \node[box, right=10mm of lint, align=center] (out) {final\\candidate};
     \draw[arr] (plan) -| ([xshift=-6mm]llm.west) -- (llm.west);
     \draw[arr] (iface) -- (llm);
     \draw[arr] (behav) -| ([xshift=-6mm]llm.west);
     \draw[arr] (llm) -- (rtl);
     \draw[arr] (rtl.east) -- ++(4mm,0) |- (lint.west);
-    \draw[arr] (lint.south) |- node[below, pos=0.75, font=\footnotesize]
-      {diagnostics (syntax loop, $\leq s$)} ([yshift=2mm]llm.north east);
+    \draw[arr] (lint.south) |- node[above, pos=0.83, align=center, font=\footnotesize]
+      {diagnostics\\(syntax loop, $\leq s$)} ([yshift=3mm]llm.north east);
     \draw[arr] (lint.east) -- node[above, font=\footnotesize]{clean} (out);
     \draw[arr] ([xshift=6mm]rtl.east) |- (tb.west);
     \draw[arr] (tb.south) -- ++(0,-4mm) -| node[below, pos=0.25, font=\footnotesize]
       {mismatch report (functional loop, $\leq f$)} (llm.south);
-    \draw[arr] (cache) -- node[right, font=\footnotesize]{hints} (llm);
+    \draw[arr] (cache.south -| llm.north) -- node[right, font=\footnotesize]{hints} (llm.north);
     \draw[arr] (lint.north) |- node[above, pos=0.75, font=\footnotesize]
       {verified fixes} (cache.east);
-  \end{tikzpicture}
+  \end{tikzpicture}}
   \caption[Verify-and-repair loop]{The generator's verify-and-repair loop.
     A candidate first iterates in the syntax repair loop against the
     benchmark-faithful Verilator lint (budget $s$), with the semantic
