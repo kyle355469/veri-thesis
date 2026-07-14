@@ -200,37 +200,15 @@ the ablation of Section~\ref{sec:results-routing}.
 
 \begin{figure}[htbp]
   \centering
-  \begin{tikzpicture}[
-      font=\small,
-      node distance=9mm and 14mm,
-      box/.style={draw, rounded corners=2pt, align=center, inner sep=5pt,
-                  minimum height=8mm},
-      dec/.style={draw, diamond, aspect=2.2, align=center, inner sep=1.5pt},
-      flow/.style={draw, rounded corners=2pt, align=center, inner sep=5pt,
-                   minimum height=8mm, very thick},
-      arr/.style={-{Stealth[length=2.5mm]}},
-    ]
-    \node[box] (spec) {task specification};
-    \node[box, below=of spec] (feat) {Tier-0: feature extraction\\(LLM judge over the spec)};
-    \node[dec, below=of feat] (pre) {pre-route\\decision};
-    \node[flow, below left=13mm and 16mm of pre] (direct) {\textbf{direct flow}\\single-shot generation\\+ repair loops};
-    \node[flow, below right=13mm and 16mm of pre] (pipe) {\textbf{pipeline flow}\\plan $\to$ generate\\+ repair loops};
-    \node[box, below=17mm of pre] (plan) {Tier-1: run planner once,\\probe the structured plan};
-    \node[dec, below=of plan] (probe) {plan\\verdict};
-    \draw[arr] (spec) -- (feat);
-    \draw[arr] (feat) -- (pre);
-    \draw[arr] (pre) -| node[above, pos=0.25]{algorithmic (B)} (direct);
-    \draw[arr] (pre) -| node[above, pos=0.25]{structural (A)} (pipe);
-    \draw[arr] (pre) -- node[right]{uncertain} (plan);
-    \draw[arr] (plan) -- (probe);
-    \draw[arr] (probe) -| node[above, pos=0.25]{self-contained} (direct);
-    \draw[arr] (probe) -| node[above, pos=0.25]{delegates (keep plan)} (pipe);
-  \end{tikzpicture}
-  \caption[Cascade router decision flow]{The two-tier cascade router. Tier-0
-    routes confident tasks from spec-level features alone; only uncertain
-    tasks pay for a planner call, whose structured plan Tier-1 probes. A
-    task routed to direct after planning discards the plan (a ``wasted
-    plan'').}
+  \includegraphics[width=\textwidth]{figures/router-light.png}
+  \caption[Cascade router decision flow]{The two-tier cascade router.
+    Tier-0 extracts the key routing attributes from the specification
+    alone: algorithmic signals (FSM, algorithm, core logic) route to the
+    direct flow, structural signals (wrapper, thin pass-through,
+    delegation) route to the pipeline flow. Only ambiguous tasks
+    generate a plan first (Tier-1); the router then re-routes by parsing
+    the plan's own vocabulary, and a task routed to direct after
+    planning discards the plan (a ``wasted plan'').}
   \label{fig:router-flow}
 \end{figure}
 

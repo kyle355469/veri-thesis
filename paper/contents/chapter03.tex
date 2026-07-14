@@ -234,9 +234,25 @@ regresses the earlier gate.
 \section{Repair Mechanisms}
 \label{sec:pipeline-repair}
 
-Three mechanisms sit on top of the generator's inner loop. Throughout the
+Three mechanisms sit on top of the generator's inner loop
+(Figure~\ref{fig:repair-loop}). Throughout the
 thesis, a repair \emph{budget} ``$s/f$'' means at most $s$ syntax-repair and
 $f$ functional-repair attempts per sample.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.85\textwidth]{figures/repair-loop-light.png}
+  \caption[Generator verify--repair loops]{The generator's two-gate
+    verify--repair structure. The generation plan and the specification's
+    interface- and behavior-topic slices feed the agentic generator;
+    each candidate is first verified with Yosys/Verilator, whose
+    diagnostics drive the syntax repair loop, and only then simulated
+    against the testbench, whose mismatch reports drive the functional
+    repair loop (off by default; Section~\ref{sec:pipeline-funcrepair}).
+    Interface-topic slices feed the syntax loop and behavior-topic
+    slices the functional loop (Section~\ref{sec:pipeline-slicing}).}
+  \label{fig:repair-loop}
+\end{figure}
 
 \subsection{Syntax Repair Loop and the Semantic Repair Cache}
 \label{sec:pipeline-cache}
@@ -244,7 +260,7 @@ $f$ functional-repair attempts per sample.
 When the internal lint fails, the diagnostics are fed back to the model in a
 repair prompt together with the current candidate, and the process repeats
 up to the syntax budget. The loop is enhanced by a \emph{semantic repair
-cache} (Figure~\ref{fig:semantic-diff}) that reuses the model's own past
+cache} that reuses the model's own past
 successes: whenever a repair subsequently \emph{passes} verification, the
 pair (diagnostic signature $\to$ unified-diff excerpt of the fix) is stored.
 Signatures are Verilator diagnostic lines with file paths and identifiers
@@ -257,16 +273,6 @@ task's samples), and \texttt{run} (shared across the whole run). Run scope
 maximizes hint availability but couples a task's samples, which corrupts
 pass@k's independence assumption --- the trade-off is measured in
 Section~\ref{sec:results-cache}.
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=0.9\textwidth]{figures/thesis-semantic-diff.png}
-  \caption[Semantic repair cache]{The semantic repair cache. Verified
-    diagnostic$\to$fix pairs from the model's own repairs are keyed by
-    identifier-stripped diagnostic signatures and replayed as advisory
-    hints when similar failures recur.}
-  \label{fig:semantic-diff}
-\end{figure}
 
 \subsection{Functional Repair Loop}
 \label{sec:pipeline-funcrepair}
@@ -318,54 +324,6 @@ that matters: with sliced repair prompts, the rescues that occur land
 within the first few attempts of both loops, so each rescue is reached
 at a fraction of the full-specification token cost per attempt.
 
-\begin{figure}[htbp]
-  \centering
-  \resizebox{\textwidth}{!}{%
-  \begin{tikzpicture}[
-      font=\small,
-      node distance=7mm and 10mm,
-      box/.style={draw, rounded corners=2pt, align=center, inner sep=5pt,
-                  minimum height=8mm},
-      ctx/.style={draw, rounded corners=2pt, align=center, inner sep=4pt,
-                  minimum height=7mm, fill=black!4},
-      gate/.style={draw, rounded corners=2pt, align=center, inner sep=5pt,
-                   minimum height=8mm, very thick},
-      arr/.style={-{Stealth[length=2.5mm]}},
-    ]
-    \node[ctx] (plan) {adapted plan\\+ reused-IP sources};
-    \node[ctx, below=4mm of plan] (iface) {interface slice\\+ DUT port contract};
-    \node[ctx, below=4mm of iface] (behav) {behavior slice};
-    \node[box, right=10mm of iface] (llm) {generator /\\repair LLM};
-    \node[box, right=10mm of llm] (rtl) {RTL\\candidate};
-    \node[gate, above right=2mm and 10mm of rtl] (lint) {Verilator lint\\(benchmark file set)};
-    \node[gate, below right=2mm and 10mm of rtl] (tb) {testbench\\simulation};
-    \node[box, above=14mm of llm, xshift=9mm] (cache) {semantic repair cache\\(verified diagnostic$\to$diff hints)};
-    \node[box, right=10mm of lint, align=center] (out) {final\\candidate};
-    \draw[arr] (plan) -| ([xshift=-6mm]llm.west) -- (llm.west);
-    \draw[arr] (iface) -- (llm);
-    \draw[arr] (behav) -| ([xshift=-6mm]llm.west);
-    \draw[arr] (llm) -- (rtl);
-    \draw[arr] (rtl.east) -- ++(4mm,0) |- (lint.west);
-    \draw[arr] (lint.south) |- node[above, pos=0.83, align=center, font=\footnotesize]
-      {diagnostics\\(syntax loop, $\leq s$)} ([yshift=3mm]llm.north east);
-    \draw[arr] (lint.east) -- node[above, font=\footnotesize]{clean} (out);
-    \draw[arr] ([xshift=6mm]rtl.east) |- (tb.west);
-    \draw[arr] (tb.south) -- ++(0,-4mm) -| node[below, pos=0.25, font=\footnotesize]
-      {mismatch report (functional loop, $\leq f$)} (llm.south);
-    \draw[arr] (cache.south -| llm.north) -- node[right, font=\footnotesize]{hints} (llm.north);
-    \draw[arr] (lint.north) |- node[above, pos=0.75, font=\footnotesize]
-      {verified fixes} (cache.east);
-  \end{tikzpicture}}
-  \caption[Verify-and-repair loop]{The generator's verify-and-repair loop.
-    A candidate first iterates in the syntax repair loop against the
-    benchmark-faithful Verilator lint (budget $s$), with the semantic
-    repair cache injecting verified diagnostic$\to$fix hints and
-    absorbing new ones; compiling candidates then enter the functional
-    repair loop against the testbench (budget $f$), which keeps the best
-    compiling candidate by mismatch count. Interface and behavior slices
-    of the specification target each loop's prompt.}
-  \label{fig:repair-loop}
-\end{figure}
 
 \section{Summary}
 

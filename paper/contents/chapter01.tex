@@ -41,22 +41,13 @@ spared work it predictably cannot convert.
 \section{Problem Statement}
 \label{sec:intro-problem}
 
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=0.95\textwidth]{figures/thesis-Deployment.png}
-  \caption[System deployment overview]{Deployment overview: CPU-side
-    retrieval, planning, verification, and caching around a GPU-side
-    local vLLM inference server.}
-  \label{fig:deployment}
-\end{figure}
-
 Concretely, this thesis addresses the following problem. Given a
 natural-language specification of one Verilog module inside an existing
 project --- with the project's other modules provided as source files,
 and a hidden-logic testbench fixing the module's exact port contract ---
 generate RTL that compiles warning-free with the full project and passes
-the testbench, using only local open-weight models
-(Figure~\ref{fig:deployment}). Three properties make this hard. The
+the testbench, using only local open-weight models.
+Three properties make this hard. The
 environment imposes \emph{fatal structural contracts} (re-declaring a
 provided module or missing a testbench port kills the sample outright).
 The tasks are \emph{heterogeneous} --- thin wrapper modules, algorithmic
