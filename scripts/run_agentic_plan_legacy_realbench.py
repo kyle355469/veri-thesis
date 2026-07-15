@@ -1596,6 +1596,23 @@ def template_defines_files(task: RealBenchTask) -> List[Path]:
     ]
 
 
+EVAL_COLLATERAL_SUFFIXES = (
+    "_ref.sv",
+    "_ref.v",
+    "_testbench.sv",
+    "_testbench.v",
+    "_stimulus_gen.sv",
+    "_stimulus_gen.v",
+)
+
+
+def eval_collateral_file(path: Path | str) -> bool:
+    """Reference model / testbench / stimulus files: eval-only collateral that must
+    never surface in prompts (naming ref_* enables the ref-wrap cheat)."""
+    name = Path(path).name
+    return name.startswith("ref_") or name.endswith(EVAL_COLLATERAL_SUFFIXES)
+
+
 def internal_verify_sources(task: RealBenchTask, include_testbench: bool = False) -> List[Path]:
     """Files compiled together with the candidate RTL during internal lint.
 
@@ -1607,14 +1624,6 @@ def internal_verify_sources(task: RealBenchTask, include_testbench: bool = False
     template_dir = task_verification_dir(task)
     if not template_dir.exists():
         return []
-    excluded_suffixes = (
-        "_ref.sv",
-        "_ref.v",
-        "_testbench.sv",
-        "_testbench.v",
-        "_stimulus_gen.sv",
-        "_stimulus_gen.v",
-    )
     top_filename = f"{task.task}_top.sv"
     defines: List[Path] = []
     others: List[Path] = []
@@ -1622,7 +1631,7 @@ def internal_verify_sources(task: RealBenchTask, include_testbench: bool = False
         name = path.name
         if name == top_filename:
             continue
-        if not include_testbench and (name.startswith("ref_") or name.endswith(excluded_suffixes)):
+        if not include_testbench and eval_collateral_file(path):
             continue
         if path.name == "config.v" or "defines" in path.name.lower():
             defines.append(path)
@@ -1668,19 +1677,22 @@ def testbench_dut_instantiation(task: RealBenchTask) -> str:
 
 
 def template_provided_module_names(task: RealBenchTask) -> List[str]:
-    """All module names declared by template files other than the candidate slot.
-    Generated code must never re-declare any of them (fatal MODDUP at eval)."""
+    """Module names declared by template dependency files other than the candidate
+    slot. Generated code must never re-declare any of them (fatal MODDUP at eval).
+    Eval collateral (ref_* golden model, testbench, stimulus) is excluded: naming
+    it in prompts leaks the ref-wrap cheat, and stripping a redeclaration of a
+    ref_* name would silently alias the candidate to the golden model."""
     template_dir = task_verification_dir(task)
     if not template_dir.exists():
         return []
     top_filename = f"{task.task}_top.sv"
     names: set[str] = set()
     for path in sorted([*template_dir.glob("*.v"), *template_dir.glob("*.sv")]):
-        if path.name == top_filename:
+        if path.name == top_filename or eval_collateral_file(path):
             continue
         names.update(MODULE_DECL_RE.findall(path.read_text(encoding="utf-8", errors="ignore")))
     names.discard(task.top_module)
-    return sorted(names)
+    return sorted(name for name in names if not name.startswith("ref_"))
 
 
 def build_environment_notes(

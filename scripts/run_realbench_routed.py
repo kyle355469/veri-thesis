@@ -22,9 +22,16 @@ loses a would-be pass -- routing accuracy, not "over-provisioning", is what matt
 Forwarded flags (model, --concurrency, --legacy-functional-repair, ...) pass through to the
 underlying runners, exactly like run_realbench_combined.py.
 
+The Tier-0 decision rule is versioned by tag (``--route-rule`` / ``RTL_ROUTE_RULE``): ``v1``
+is the legacy complementary polarity above (kept to reproduce pre-Jul-2026 runs); ``v2-20b`` /
+``v2-120b`` are the wrap-cleaned pipeline-default rules (see rag_rtl/routing.py). Under v2 the
+cascade never emits ``uncertain``, so the plan-probe tier is effectively idle.
+
 Usage::
 
-    python scripts/run_realbench_routed.py --router cascade --decider llm --samples 10
+    python scripts/run_realbench_routed.py --router cascade --decider llm --samples 10                # v2-20b (default)
+    python scripts/run_realbench_routed.py --router cascade --decider llm --route-rule v2-120b --samples 10
+    python scripts/run_realbench_routed.py --router cascade --decider llm --route-rule v1 --samples 10  # legacy
     python scripts/run_realbench_routed.py --router oracle --route-labels routing/route_labels.json --samples 10
 """
 from __future__ import annotations
@@ -94,6 +101,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--router", choices=ROUTERS, default="cascade")
     parser.add_argument("--decider", choices=["keyword", "llm"], default="keyword")
+    parser.add_argument(
+        "--route-rule",
+        choices=sorted(routing.ROUTE_RULES),
+        default=os.getenv("RTL_ROUTE_RULE", "v2-20b"),
+        help="Tier-0 rule version tag (pre/cascade arms). 'v1' = legacy complementary polarity "
+        "(reproduces pre-Jul-2026 runs, cascades to the plan-probe on 'uncertain'); "
+        "'v2-20b'/'v2-120b' = wrap-cleaned pipeline-default rule (total: no uncertain, no probe), "
+        "validated with --decider llm. Also settable via RTL_ROUTE_RULE; the tag is recorded in "
+        "routing/plan.json and summary.json.",
+    )
     parser.add_argument("--samples", type=int, default=10, help="Samples per task (each task runs in one flow).")
     parser.add_argument("--output-dir", default="runs/realbench_routed")
     parser.add_argument("--solution-name", default="routed")
@@ -151,11 +168,15 @@ def plan_routing(
             (direct_tasks if decision == "direct" else pipeline_tasks).append(name)
             meta[name] = {"routed_by": "oracle", "route_decision": decision, "route_features": None}
         elif router == "pre":
-            decision, feats = routing.route_pre(task.prompt, args.decider, feature_client, cache_dir, force=True)
+            decision, feats = routing.route_pre(
+                task.prompt, args.decider, feature_client, cache_dir, force=True, rule=args.route_rule
+            )
             (direct_tasks if decision == "direct" else pipeline_tasks).append(name)
             meta[name] = {"routed_by": f"pre_{args.decider}", "route_decision": decision, "route_features": feats.to_dict()}
         elif router == "cascade":
-            decision, feats = routing.route_pre(task.prompt, args.decider, feature_client, cache_dir, force=False)
+            decision, feats = routing.route_pre(
+                task.prompt, args.decider, feature_client, cache_dir, force=False, rule=args.route_rule
+            )
             if decision == "direct":
                 direct_tasks.append(name)
             elif decision == "pipeline":
@@ -182,7 +203,10 @@ def run_routed(argv: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     discovery_args = _sub_args(build_pipeline_parser, forwarded, args.samples, pipeline_dir, args.solution_name)
     discovery_args.realbench_root = args.realbench_root
     tasks = discover_tasks(discovery_args)
-    print(f"[routed] router={args.router} decider={args.decider} discovered {len(tasks)} task(s)")
+    print(f"[routed] router={args.router} decider={args.decider} rule={args.route_rule} discovered {len(tasks)} task(s)")
+    if args.route_rule.startswith("v2") and args.decider != "llm" and args.router in ("pre", "cascade"):
+        print("[routed] WARNING: v2 rules gate on est_state_bits, which the keyword decider "
+              "always leaves at 0 -- v2 is only validated with --decider llm")
 
     labels = load_labels(args.route_labels)
     cache_dir = output_dir / "routing" / "cache"
@@ -198,7 +222,11 @@ def run_routed(argv: Optional[Sequence[str]] = None) -> Dict[str, Any]:
     # Persist the routing plan for auditing.
     (output_dir / "routing").mkdir(parents=True, exist_ok=True)
     (output_dir / "routing" / "plan.json").write_text(
-        dumps_json({"router": args.router, "decider": args.decider, "meta": meta}, indent=2), encoding="utf-8"
+        dumps_json(
+            {"router": args.router, "decider": args.decider, "route_rule": args.route_rule, "meta": meta},
+            indent=2,
+        ),
+        encoding="utf-8",
     )
 
     pipeline_records: List[Dict[str, Any]] = []
@@ -320,6 +348,7 @@ def routed_summary(args: argparse.Namespace, merged: Sequence[Dict[str, Any]], l
         "flow": "routed",
         "router": args.router,
         "decider": args.decider,
+        "route_rule": getattr(args, "route_rule", routing.DEFAULT_ROUTE_RULE),
         "samples": args.samples,
         "num_tasks": len(all_keys),
         "combined": {**_rate_block(merged), "solved_tasks": len(solved), "pass_at_k": safe_rate(len(solved), len(all_keys))},

@@ -21,6 +21,17 @@ hallucinates. But that same machinery invents spurious structure that derails se
 algorithmic modules (class "B"), which direct writes cleanly in one shot. So **A passes under
 pipeline, B passes under direct**: routing sends A->pipeline and B->direct, and *either*
 misroute loses a would-be pass (there is no "safe" over-provision direction).
+
+RULE VERSIONS. The paragraph above describes the **v1** polarity, which the Jul 2026
+ref-wrap cleaning falsified: with wrap samples invalidated, pipeline >= direct on 58/60
+RealBench tasks, so misrouting to pipeline only costs compute while misrouting to direct
+costs passes. **v2** (:func:`decide_pre_v2`) encodes the corrected, asymmetric rule --
+pipeline is the default; direct is reserved for narrow self-contained computational leaves
+(LUT/CRC/key-expand/small queues). Rules are selected by tag via :data:`ROUTE_RULES`
+(``rule=`` on :func:`route_pre`, ``--route-rule`` on the routed runner, or the
+``RTL_ROUTE_RULE`` env var); ``v1`` remains available to reproduce pre-cleaning runs.
+v2 thresholds were fitted in-sample on the 60 RealBench module tasks against wrap-cleaned
+hybrid + Full-2T outcomes (26/60 @120B profile, 22/60 @20B profile, zero lost-solvable).
 """
 from __future__ import annotations
 
@@ -237,15 +248,86 @@ def decide_pre(feats: RouteFeatures, confidence_tau: float = 0.5) -> str:
     return "uncertain"
 
 
-def size_fallback(spec: str) -> str:
-    """Resolve an ``uncertain`` Tier-0 decision by spec size (used by the ``pre`` arm)."""
-    body = _spec_body(spec)
-    ports = len(re.findall(r"\|\s*(input|output|inout)\b", body, re.I)) or len(
+def _spec_ports(body: str) -> int:
+    """Port count from a (boilerplate-stripped) spec body: markdown port-table rows,
+    falling back to bare input/output/inout keyword hits."""
+    return len(re.findall(r"\|\s*(input|output|inout)\b", body, re.I)) or len(
         re.findall(r"\b(input|output|inout)\b", body, re.I)
     )
+
+
+def size_fallback(spec: str) -> str:
+    """Resolve an ``uncertain`` Tier-0 decision by spec size (v1 ``pre`` arm only)."""
+    body = _spec_body(spec)
     # Larger/wider specs skew toward self-contained algorithmic modules (Set B -> direct);
     # short specs skew toward thin wrappers/integration (Set A -> pipeline).
-    return "direct" if (len(body) > 9000 or ports > 25) else "pipeline"
+    return "direct" if (len(body) > 9000 or _spec_ports(body) > 25) else "pipeline"
+
+
+# --------------------------------------------------------------------------- #
+# Tier-0 v2: wrap-cleaned asymmetric rule (pipeline-default)
+# --------------------------------------------------------------------------- #
+
+# Numeric caps per model-scale profile. The rule shape is shared; only the caps widen
+# with model capability (the direct-safe set grows with scale). ``bits_*`` gate on the
+# LLM-estimated state bits this module itself holds -- it is what separates the
+# direct-tie set (crc_16=16, clkgate=1) from pipeline-much-better tasks (rcon=36,
+# aes_key_expand_128=132) at 20B.
+V2_PROFILES: Dict[str, Dict[str, int]] = {
+    "20b": {"ports": 30, "spec_plain": 6000, "bits_plain": 20, "spec_algo": 6000, "bits_algo": 64},
+    "120b": {"ports": 30, "spec_plain": 6000, "bits_plain": 140, "spec_algo": 12000, "bits_algo": 140},
+}
+
+
+def decide_pre_v2(feats: RouteFeatures, spec: str, profile: str = "20b") -> str:
+    """v2 spec pre-route: ``"direct"`` | ``"pipeline"`` (total -- never ``"uncertain"``).
+
+    Pipeline is the safe default (post-cleaning, a pipeline misroute only costs compute);
+    direct is carved out for narrow self-contained computational leaves. Clause order:
+
+    1. delegation -> pipeline (wrappers/memories need the pipeline's interface wiring)
+    2. thin field-routing wider than 10 ports -> pipeline (direct scores 0 on these at 20B)
+    3. narrow + short spec + small own state -> direct
+    4. self-contained algorithm within the profile caps -> direct
+
+    ``has_fsm`` deliberately does NOT veto direct (key_expand/oitf/tx_filler carry fsm=Y).
+    Calibrated for LLM features (``--decider llm``); the keyword extractor leaves
+    ``est_state_bits`` at 0, which makes clauses 3-4 over-admit narrow tasks.
+    """
+    prof = V2_PROFILES[profile]
+    body = _spec_body(spec)
+    ports = _spec_ports(body)
+    slen = len(body)
+    bits = max(0, int(feats.est_state_bits or 0))
+    if feats.delegates_to_submodules:
+        return "pipeline"
+    if feats.thin_control and ports > 10:
+        return "pipeline"
+    if ports <= prof["ports"] and slen <= prof["spec_plain"] and bits <= prof["bits_plain"]:
+        return "direct"
+    if feats.has_algorithm and ports <= prof["ports"] and slen <= prof["spec_algo"] and bits <= prof["bits_algo"]:
+        return "direct"
+    return "pipeline"
+
+
+# Version-tag registry: tag -> (feats, spec) -> "direct" | "pipeline" | "uncertain".
+# New rule revisions get a new tag here; old tags stay frozen so any past run can be
+# reproduced by its recorded tag.
+ROUTE_RULES: Dict[str, Any] = {
+    "v1": lambda feats, spec: decide_pre(feats),
+    "v2-20b": lambda feats, spec: decide_pre_v2(feats, spec, "20b"),
+    "v2-120b": lambda feats, spec: decide_pre_v2(feats, spec, "120b"),
+}
+DEFAULT_ROUTE_RULE = "v1"
+
+
+def resolve_route_rule(tag: Optional[str]) -> Tuple[str, Any]:
+    """Resolve a rule tag (``None`` -> ``RTL_ROUTE_RULE`` env -> :data:`DEFAULT_ROUTE_RULE`)."""
+    tag = tag or os.environ.get("RTL_ROUTE_RULE") or DEFAULT_ROUTE_RULE
+    try:
+        return tag, ROUTE_RULES[tag]
+    except KeyError:
+        raise ValueError(f"unknown route rule {tag!r}; known tags: {sorted(ROUTE_RULES)}") from None
 
 
 def route_pre(
@@ -255,15 +337,19 @@ def route_pre(
     cache_dir: Optional[str | Path] = None,
     *,
     force: bool = False,
+    rule: Optional[str] = None,
 ) -> Tuple[str, RouteFeatures]:
-    """Tier-0 entry point. ``force`` resolves ``uncertain`` via :func:`size_fallback`."""
+    """Tier-0 entry point. ``rule`` selects the decision version from :data:`ROUTE_RULES`
+    (default: ``RTL_ROUTE_RULE`` env var, else ``v1``). For v1, ``force`` resolves
+    ``uncertain`` via :func:`size_fallback`; v2 rules are total and never uncertain."""
+    _, decide = resolve_route_rule(rule)
     if decider == "llm":
         if client is None:
             raise ValueError("decider='llm' requires a chat client")
         feats = extract_features_llm(spec, client, cache_dir)
     else:
         feats = extract_features_keyword(spec)
-    decision = decide_pre(feats)
+    decision = decide(feats, spec)
     if force and decision == "uncertain":
         decision = size_fallback(spec)
     return decision, feats
