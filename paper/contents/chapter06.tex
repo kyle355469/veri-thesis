@@ -141,6 +141,75 @@ arms: greedy decoding beats the sampled per-sample mean
 precision-versus-diversity trade; temperature is what buys the pass@10
 headroom.
 
+\paragraph{Against the published RealBench numbers.}
+The same @1/@5 axis lets our arms be read directly against the
+RealBench study's own evaluation of ten frontier and
+Verilog-specialized models~\citep{realbench2025}
+(Table~\ref{tab:published}). The published protocol matches ours
+closely --- the same 60 module tasks, the same Makefile verdict, the
+same temperature (0.2) and unbiased estimator, with @1/@5 estimated
+from twenty samples against our ten --- but prompts every model
+\emph{directly}, so the comparison isolates what the system around the
+model is worth. The strongest published rates are func@1 13.5\,\%
+(GPT-4o-V) and func@5 17.3\,\% (DeepSeek-V3-671B). \textsc{Direct-t0}
+--- our 20B model under the same direct prompting --- lands inside
+that frontier band (8.3\,\%), yet with the grounded pipeline and
+repair loops around it the identical weights roughly double the best
+published func@1 and func@5 (\textsc{Func-10/10}: 27.5\,\% and
+35.6\,\%) and close to triple the best published syntax@1 (81.5\,\%
+vs.\ 29.3\,\%). The Verilog-specialized fine-tunes fare worst of all
+on this benchmark (CodeV-QW-7B func@1 0.3\,\%), reinforcing this
+section's reading that system design separates RealBench performance
+more than model identity or scale does. Two caveats bound the
+comparison: the published runs predate the June-2026 AES S-box
+testbench fix (Section~\ref{sec:threats}) --- though excluding both
+S-box tasks moves none of our rates by more than 2.2\,pp --- and
+RealBench additionally reports formal@$k$ (equivalence checking
+against the golden model), which our simulation-based harness does not
+measure, so the table compares the two shared metrics only.
+
+\begin{table}[htbp]
+  \centering
+  \caption[Published RealBench results vs.\ this thesis]{Module-level
+    RealBench results published in the RealBench
+    study~\citep{realbench2025} (direct prompting, temperature 0.2,
+    @1/@5 estimated from 20 samples per task; o1-preview sampled once)
+    against this thesis's arms on the same 60 tasks and the same
+    Makefile verdict (temperature 0.2, 10 samples; the \textsc{-t0}
+    arms are greedy single samples, so their @5 is undefined). Our
+    rates exclude ref-wrap samples
+    (Section~\ref{sec:results-artifacts}); excluding the two
+    post-fix-boundary S-box tasks as well would shift no rate by more
+    than 2.2\,pp.}
+  \label{tab:published}
+  \small
+  \begin{tabular}{lrrrr}
+    \toprule
+    & \multicolumn{2}{c}{Syntax (\%)} & \multicolumn{2}{c}{Functional (\%)} \\
+    \cmidrule(lr){2-3} \cmidrule(lr){4-5}
+    Model / arm & @1 & @5 & @1 & @5 \\
+    \midrule
+    \multicolumn{5}{l}{\emph{Single LLMs, direct prompting; published rows from~\citep{realbench2025}}} \\
+    GPT-4-Turbo        & 27.0 & 36.2 &  9.4 & 13.8 \\
+    o1-preview         & 28.3 & ---  & 13.3 & ---  \\
+    Llama-3.1-8B       & 10.3 & 21.7 &  2.9 &  6.2 \\
+    Llama-3.1-405B     &  6.6 & 15.7 &  2.8 &  7.6 \\
+    DeepSeek-V3-671B   & 24.9 & 32.0 & 12.8 & 17.3 \\
+    DeepSeek-R1-671B   & 13.4 & 30.4 &  8.0 & 16.2 \\
+    RTLCoder-DS-6.7B   & 10.9 & 19.0 &  3.4 &  8.5 \\
+    CodeV-QW-7B        &  3.6 &  7.4 &  0.3 &  1.0 \\
+    GPT-4o             & 24.5 & 29.7 & 10.9 & 14.0 \\
+    GPT-4o-V           & 29.3 & 38.1 & 13.5 & 16.2 \\
+    gpt-oss-20B (\textsc{Direct-t0}, ours)        & 25.0 & ---  &  8.3 & ---  \\
+    \midrule
+    \multicolumn{5}{l}{\emph{This thesis: system around the same open weights}} \\
+    \textsc{Pipe-t0} (20B, grounded pipeline)     & 61.7 & ---  & 25.0 & ---  \\
+    \textsc{Func-10/10} (20B, pipeline + repair)  & \textbf{81.5} & \textbf{90.7} & \textbf{27.5} & \textbf{35.6} \\
+    \textsc{Pipe-120b} (120B, pipeline + repair)  & 76.3 & 89.5 & 24.5 & 32.8 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
 \section{Repair-Cache Ablation: Density, Not Solvability}
 \label{sec:results-cache}
 
@@ -219,7 +288,9 @@ each loop's budget is best spent.
   \centering
   \includegraphics[width=\textwidth]{figures/fig_repair_budget.pdf}
   \caption[Repair-attempt distributions]{\textsc{Func-10/10}: outcomes by
-    repair attempts consumed. Left: samples by syntax-repair attempts;
+    repair attempts consumed (log-scale counts, so the single-digit
+    late-attempt buckets stay visible; empty buckets have no bar).
+    Left: samples by syntax-repair attempts;
     nearly every bucket short of the cap ends syntax-clean, while the cap
     bucket (10) is 95\,\% failures. Right: compiling samples by
     functional-repair attempts; every rescue lands by attempt~7, and 324
