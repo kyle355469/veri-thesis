@@ -3,9 +3,11 @@
 
 Same router and pipeline as scripts/run_agentic_plan_legacy_realbench.py: Tier-0
 spec pre-route (``--router cascade|pre|plan_probe|all_pipeline|all_direct``,
-``--decider keyword|llm``), Tier-1 plan-probe on the generated plan, direct flow
-with the shared repair loops (agent.repair_rtl(plan=None)), and the plan-driven
-legacy generator for pipeline-routed tasks.
+``--decider keyword|llm``, versioned decision rule via ``--route-rule
+v1|v2-20b|v2-120b``, default ``v2-20b`` = the wrap-cleaned pipeline-default rule,
+validated with ``--decider llm``), Tier-1 plan-probe on the generated plan, direct
+flow with the shared repair loops (agent.repair_rtl(plan=None)), and the
+plan-driven legacy generator for pipeline-routed tasks.
 
 Benchmark collateral is reused verbatim from scripts/run_verilog_eval.py: dataset
 discovery (``*_prompt.txt`` / ``*_test.sv`` / ``*_ref.sv``, incl. the
@@ -254,6 +256,7 @@ def run_one(
         "reused_existing": reused_existing,
         "router": args.router,
         "decider": args.decider,
+        "route_rule": route.get("route_rule"),
         "flow": outcome.get("flow", route["flow"]),
         "route_decision": outcome.get("route_decision", route["route_decision"] or route["flow"]),
         "routed_by": outcome.get("routed_by", route["routed_by"]),
@@ -297,6 +300,7 @@ def summarize(records: Sequence[Dict[str, Any]], args: argparse.Namespace, elaps
         "task": args.task,
         "router": args.router,
         "decider": args.decider,
+        "route_rule": getattr(args, "route_rule", None),
         "num_records": count,
         "num_problems": len({record["problem"] for record in records}),
         "samples_per_problem": args.samples,
@@ -349,14 +353,14 @@ def main(argv: Optional[List[str]] = None) -> None:
     problems = select_problems(args, effective_root)
     work_items = list(iter_work_items(problems, args.samples))
     print(
-        f"[verilog-eval] router={args.router} decider={args.decider} discovered {len(problems)} problem(s), "
-        f"{len(work_items)} work item(s)"
+        f"[verilog-eval] router={args.router} decider={args.decider} rule={args.route_rule} "
+        f"discovered {len(problems)} problem(s), {len(work_items)} work item(s)"
     )
 
     routes = plan_routes(problems, args, output_dir)
     (output_dir / "routing").mkdir(parents=True, exist_ok=True)
     (output_dir / "routing" / "plan.json").write_text(
-        dumps_json({"router": args.router, "decider": args.decider, "routes": routes}, indent=2),
+        dumps_json({"router": args.router, "decider": args.decider, "route_rule": args.route_rule, "routes": routes}, indent=2),
         encoding="utf-8",
     )
     flows = [route["flow"] for route in routes.values()]

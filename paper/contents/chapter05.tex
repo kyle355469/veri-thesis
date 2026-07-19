@@ -10,7 +10,7 @@ Chapter~\ref{ch:06}: the benchmark and its scoring semantics
 commit to (Section~\ref{sec:setup-metrics}), and a complete inventory of the
 experimental runs together with their configurations
 (Section~\ref{sec:setup-runs}). The inventory table doubles as the
-reproducibility anchor of this thesis: every number reported later traces back
+reproducibility anchor of this thesis. Every number reported later traces back
 to exactly one row of Table~\ref{tab:run-inventory}.
 
 \section{The RealBench Benchmark}
@@ -45,10 +45,10 @@ The benchmark distinguishes \emph{module-level} tasks, which target one module
 inside an otherwise-provided project, from \emph{system-level} tasks, which
 ask for an entire subsystem. This thesis reports on the \textbf{60
 module-level tasks} summarized in Table~\ref{tab:families}; system-level
-tasks are excluded from all headline numbers because their specifications
+tasks are excluded from all headline numbers for two reasons. Their specifications
 (up to $\sim$704\,k characters for \texttt{e203\_cpu\_top}) exceed what any of
 our serving configurations can process without aggressive condensation, and
-because a 60-task universe with three distinct families is already large
+a 60-task universe with three distinct families is already large
 enough to expose the phenomena this thesis studies. The three families span
 a useful difficulty gradient: AES modules are small and algorithmically
 self-contained, SDC modules implement Wishbone-facing control logic with
@@ -68,7 +68,7 @@ simulation reports zero output mismatches against the golden reference.
 Two consequences of this design recur throughout the thesis. First, our
 syntax numbers are conservative relative to benchmarks that fail only on
 errors (Section~\ref{sec:threats}). Second, the environment imposes two
-non-negotiable structural contracts on generated code: a dependency that the
+non-negotiable structural contracts on generated code. A dependency that the
 environment ships as a file must be \emph{instantiated, never re-declared}
 (re-declaration is a fatal \texttt{MODDUP}), and the testbench's DUT
 instantiation fixes the exact port list (a missing port is a fatal
@@ -96,10 +96,10 @@ appear in this thesis:
 
 One serving behavior shaped the implementation and is documented here
 because it is invisible in the results yet load-bearing for
-reproduction: the server caps completion length rather than rejecting a
+reproduction. The server caps completion length rather than rejecting a
 request when prompt and requested tokens together exceed the
 131{,}072-token context window, but returns HTTP~400 when the prompt
-alone exceeds it --- the condition behind the ``not generated'' bucket
+alone exceeds it. This is the condition behind the ``not generated'' bucket
 of Section~\ref{sec:results-failure} and one motivation for the
 specification condensation of Section~\ref{sec:pipeline-planner}.
 
@@ -116,13 +116,13 @@ estimator~\citep{chen2021humaneval}
   \left[ 1 - \binom{n-c}{k} \Big/ \binom{n}{k} \right],
 \]
 where $c$ is the number of passing samples for the task, averaged over the 60
-tasks. We additionally report \emph{solved tasks}: the number of tasks with
-at least one passing sample, which equals $60 \cdot \text{pass@}n$ and is the
+tasks. We also report \emph{solved tasks}, the number of tasks with
+at least one passing sample. This equals $60 \cdot \text{pass@}n$ and is the
 quantity a practitioner who can afford $n$ attempts actually cares about.
 Pass@k carries an independence assumption across a task's samples; the
 run-scoped repair cache deliberately shares information across a task's
-samples (Section~\ref{sec:results-cache}), so all load-bearing pass@k
-values come from arms whose samples are independent, and run-scoped
+samples (Section~\ref{sec:results-cache}). All load-bearing pass@k
+values therefore come from arms whose samples are independent, and run-scoped
 numbers are shown only to quantify that specific sharing effect.
 
 \paragraph{Cost.}
@@ -184,6 +184,7 @@ repair-attempt budgets of Section~\ref{sec:pipeline-repair}.
     \textsc{Router-t1}   & 20B  & $\times 10$ & 0.2 & plan-probe tier only, budgets $6/4$ \\
     \textsc{Router-2t}   & 20B  & $\times 10$ & 0.2 & full cascade (Tier-0 LLM + probe), $6/4$ \\
     \textsc{Router-2t-120b} & 120B & $\times 10$ & 0.2 & as \textsc{Router-2t} \\
+    \textsc{Router-v2}   & 20B  & $\times 10$ & 0.2 & rule re-derived post-audit (pipeline-default, no probe), $6/4$, leak-filtered direct prompt \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -210,6 +211,7 @@ repair-attempt budgets of Section~\ref{sec:pipeline-repair}.
     \textsc{Router-t1}   & \texttt{T1\_router\_oss20B\_sync6\_func4} \\
     \textsc{Router-2t}   & \texttt{Full-2T\_router\_oss20B\_sync6\_func4} \\
     \textsc{Router-2t-120b} & \texttt{Full-2T\_router\_oss120B\_sync6\_func4} \\
+    \textsc{Router-v2}   & \texttt{Full-2T\_router\_oss20B\_syn6\_func4\_s10\_t02\_v2} \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -220,12 +222,20 @@ repair budgets ($2/4 \to 10/10$) and a scoring waiver
 (\texttt{TIMESCALEMOD} warnings suppressed) relative to \textsc{Func-2/4};
 Section~\ref{sec:results-budget} disentangles the two. And \textsc{Hybrid}
 predates the direct-flow repair loop that the router runs include, besides
-using the larger $10/10$ budgets; Section~\ref{sec:results-routing}
+using the larger $10/10$ budgets. Section~\ref{sec:results-routing}
 therefore treats \textsc{Router-t1} $\to$ \textsc{Router-2t} as the only
 single-variable routing comparison and labels the comparison against
-\textsc{Hybrid} as directional.
+\textsc{Hybrid} as directional. A third caution spans the whole
+inventory. The benchmark repaired its two S-box testbenches on
+June~25, 2026, so arms scored before the repair (\textsc{Direct-t0},
+\textsc{Pipe-t0}, the \textsc{Cache} trio, \textsc{Pipe-120b},
+\textsc{Func-2/4}) and after it (\textsc{Func-10/10}, \textsc{Hybrid},
+the router arms) are not comparable on \texttt{aes\_sbox} and
+\texttt{aes\_inv\_sbox}. The cross-boundary comparisons in
+Chapter~\ref{ch:06} exclude these two tasks
+(Section~\ref{sec:results-artifacts}).
 
-One scoring rule applies to every run with a direct flow: samples whose
+One scoring rule applies to every run with a direct flow. Samples whose
 generated RTL merely instantiates a leaked \texttt{ref\_*} reference
 model are invalidated --- counted as syntax and functional failures ---
 before any rate is computed. Section~\ref{sec:results-artifacts}

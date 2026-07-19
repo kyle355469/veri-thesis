@@ -3,7 +3,7 @@
 \chapter{Background and Related Work}
 \label{ch:02}
 
-This chapter fixes the hardware-design background the thesis assumes
+This chapter sets out the hardware-design background the thesis assumes
 (Section~\ref{sec:bg-rtl}), then surveys the four research threads it
 builds on: LLMs for Verilog generation
 (Section~\ref{sec:rw-llm-verilog}), verification-in-the-loop repair
@@ -19,21 +19,21 @@ Register-transfer-level (RTL) design expresses digital hardware as
 synchronous transfers between registers through combinational logic,
 written in a hardware description language --- here Verilog/SystemVerilog
 \citep{ieee1800}. Unlike software, RTL code carries a hard structural
-interface: a module's port list is a physical contract with its
+interface. A module's port list is a physical contract with its
 environment, and simulation semantics (blocking vs.\ nonblocking
 assignment, delta-cycle scheduling) can make two logically equivalent
-descriptions observably different to a testbench --- a subtlety that
-returns with force in Section~\ref{sec:results-artifacts}. Correctness is
-established by tools, not review: this thesis uses
+descriptions observably different to a testbench. That subtlety
+comes back in Section~\ref{sec:results-artifacts}. Correctness is
+established by tools, not review. This thesis uses
 Verilator~\citep{verilator} for lint and compiled simulation and
 Yosys~\citep{wolf2013yosys} for synthesis-based structural analysis.
 
-Industrial hardware productivity rests on \emph{IP reuse}: assembling
-verified, pre-existing blocks rather than rewriting them, a practice
+Industrial hardware productivity rests on \emph{IP reuse}, the practice
+of assembling verified, pre-existing blocks rather than rewriting them,
 codified two decades ago~\citep{keating2002reuse}. A working chip team
 spends much of its effort not on new datapaths but on \emph{integration}
 --- instantiating existing modules and wiring their interfaces correctly.
-This observation is the design premise of Chapter~\ref{ch:03}: if
+This observation is the design premise of Chapter~\ref{ch:03}. If
 real-world RTL work is reuse-dominated, an RTL-generating agent should
 plan reuse explicitly rather than synthesize every line from scratch. The
 open-source projects our benchmark draws from --- an AES cipher core and
@@ -47,23 +47,23 @@ products of this reuse culture.
 \paragraph{Benchmarks.}
 Evaluation infrastructure for LLM-generated Verilog began with
 fine-tuning-era studies~\citep{pearce2020dave, thakur2023verigen} and
-crystallized into standard suites: VerilogEval~\citep{liu2023verilogeval},
-machine-checked HDLBits-derived problems with the pass@k protocol
+then settled into standard suites. VerilogEval~\citep{liu2023verilogeval}
+offers machine-checked HDLBits-derived problems with the pass@k protocol
 inherited from HumanEval~\citep{chen2021humaneval}, later revised with
-specification-to-RTL tasks~\citep{pinckney2025verilogeval2}; and
-RTLLM~\citep{lu2024rtllm}, larger open-ended designs judged on syntax,
-functionality, and quality. These suites consist predominantly of
+specification-to-RTL tasks~\citep{pinckney2025verilogeval2}.
+RTLLM~\citep{lu2024rtllm} adds larger open-ended designs judged on syntax,
+functionality, and quality. These suites consist mostly of
 \emph{self-contained} single modules. RTL-Repo~\citep{allam2024rtlrepo}
-moved evaluation toward multi-file repository context, and
-RealBench~\citep{realbench2025} --- used throughout this thesis
-(Section~\ref{sec:setup-realbench}) --- builds tasks from complete, real IP
+moved evaluation toward multi-file repository context.
+RealBench~\citep{realbench2025}, used throughout this thesis
+(Section~\ref{sec:setup-realbench}), builds tasks from complete, real IP
 projects in which a target module must integrate against provided
 dependencies and survive a strict warnings-as-fatal harness.
-Table~\ref{tab:bench-stats} quantifies how far apart these settings are:
-a RealBench module task averages an order of magnitude more code lines
-and synthesized cells than a VerilogEval problem, is specified by a
-document two orders of magnitude longer, and --- alone among the suites
---- instantiates submodules at all. The distinction is not cosmetic:
+Table~\ref{tab:bench-stats} quantifies how far apart these settings are.
+A RealBench module task averages an order of magnitude more code lines
+and synthesized cells than a VerilogEval problem, and is specified by a
+document two orders of magnitude longer. Alone among the suites, it
+instantiates submodules at all. The distinction is not cosmetic.
 Chapter~\ref{ch:06} shows that the phenomena that dominate RealBench
 (interface contracts, reuse, integration) are precisely the ones
 self-contained benchmarks cannot exhibit.
@@ -95,7 +95,7 @@ self-contained benchmarks cannot exhibit.
 \end{table}
 
 \paragraph{Models and systems.}
-One line of work improves the generator itself: VeriGen fine-tunes on
+One line of work improves the generator itself. VeriGen fine-tunes on
 harvested Verilog corpora~\citep{thakur2023verigen}; ChipNeMo domain-adapts
 LLMs across chip-design tasks~\citep{liu2023chipnemo};
 RTLCoder~\citep{liu2024rtlcoder}, CodeV~\citep{zhao2024codev},
@@ -107,7 +107,7 @@ distillation and debug-reasoning workflows, and CraftRTL by adding
 correct-by-construction non-textual
 representations and targeted repair data. Conversational studies such as Chip-Chat~\citep{blocklove2023chipchat}
 probed interactive design with a human in the loop. This thesis is
-orthogonal to all of them: we hold the base models fixed (off-the-shelf
+orthogonal to all of them. We hold the base models fixed (off-the-shelf
 open weights, Section~\ref{sec:setup-models}) and engineer the
 \emph{system around} the model --- planning, grounding, verification,
 repair, and routing. Better base models slot in unchanged; indeed
@@ -135,14 +135,14 @@ results~\citep{ho2025verilogcoder}.
 The repair machinery of Section~\ref{sec:pipeline-repair} belongs to this
 family but contributes three things the prior systems do not measure.
 First, a \emph{semantic repair cache} that replays the model's own
-verified diagnostic$\to$diff fixes across samples --- related in spirit to
+verified diagnostic$\to$diff fixes across samples. It is related in spirit to
 RTLFixer's error-pattern retrieval, but populated online from verified
 successes rather than curated offline, and evaluated for what it changes
 (sample density) and what it cannot (task solvability,
 Section~\ref{sec:results-cache}). Second, an explicit
-\emph{oracle-feedback accounting}: our functional repair loop consumes the
+\emph{oracle-feedback accounting}. Our functional repair loop consumes the
 scoring testbench's mismatch signal, so it is quarantined as a separate
-arm --- a methodological line most repair papers leave undrawn. Third, a
+arm, a methodological line most repair papers do not draw. Third, a
 \emph{budget calibration} showing both repair phases are fix-fast-or-never
 (Section~\ref{sec:results-budget}), turning repair-loop depth from
 folklore into a measured engineering parameter.
@@ -156,19 +156,19 @@ supplies cross-file context that no prompt window holds natively, whether
 by similar-code lookup~\citep{lu2022reacc} or iterative repository-level
 retrieval interleaved with generation~\citep{zhang2023repocoder}. Our
 per-task IP catalog (Section~\ref{sec:pipeline-overview}) is a
-deliberately narrow instance: retrieval is scoped to the task's own
-dependency closure --- never across tasks --- and its product is not
+deliberately narrow instance. Retrieval is scoped to the task's own
+dependency closure, never across tasks, and its product is not
 only free-form context but a \emph{closed vocabulary} of instantiable
 modules. The planner queries this catalog through its retrieval tools,
-the catalog digest is additionally injected into its prompt, and every
+and the catalog digest is also injected into its prompt. Every
 reuse decision in its output is grounded against the same vocabulary
-post-hoc (Section~\ref{sec:results-grounding}) --- retrieval as
+post-hoc (Section~\ref{sec:results-grounding}), so retrieval serves as
 constraint as well as context.
 
 \section{LLM Routing and Cascades}
 \label{sec:rw-routing}
 
-A parallel literature allocates queries across models of different cost:
+A parallel literature allocates queries across models of different cost.
 FrugalGPT sequences models with a learned stopping
 rule~\citep{chen2023frugalgpt}; Hybrid LLM trains a router to send easy
 queries to a small model~\citep{ding2024hybridllm}; RouteLLM learns
@@ -176,13 +176,13 @@ routers from human preference data~\citep{ong2024routellm}; AutoMix
 self-verifies before escalating~\citep{aggarwal2024automix}. All of these
 route between \emph{models} on general text tasks, assuming the larger
 model weakly dominates in quality. Our router (Chapter~\ref{ch:04})
-differs in both axes. It routes between \emph{workflows} over the same
+differs on both axes. It routes between \emph{workflows} over the same
 model --- a cheap direct flow and an expensive agentic pipeline --- and
-the expensive flow does \emph{not} dominate: on self-contained algorithmic
+the expensive flow does \emph{not} dominate. On self-contained algorithmic
 modules the pipeline is actively harmful
 (Section~\ref{sec:router-motivation}), so routing is about matching task
 \emph{character} to flow \emph{shape}, not buying quality with compute.
-Its cascade structure is also domain-specific: the mid-tier probe
+Its cascade structure is also domain-specific. The mid-tier probe
 inspects a structured artifact the pipeline produces anyway (the plan),
 so the escalation step costs one planner call rather than a full
 duplicate generation.
@@ -218,7 +218,7 @@ To our knowledge, this thesis is the first system to combine
 catalog-grounded IP-reuse \emph{planning} with per-task \emph{workflow
 routing} for RTL generation, and the first to evaluate the combination on
 a repository-realistic benchmark under controlled ablations
-(Table~\ref{tab:positioning}). Equally deliberately, it contributes the
+(Table~\ref{tab:positioning}). By design, it also contributes the
 kind of controlled diagnostic measurements the surveyed literature
 rarely reports: a grounding pass that makes every reuse decision in
 every plan auditable, a repair cache whose effect is precisely located

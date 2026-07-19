@@ -132,6 +132,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--samples", type=int, default=1, help="Samples per task for the benchmark runners.")
     parser.add_argument("--concurrency", type=int, default=4, help="Worker threads for the benchmark runners.")
     parser.add_argument("--decider", choices=["keyword", "llm"], default="keyword", help="Tier-0 decider for router arms.")
+    parser.add_argument(
+        "--route-rule",
+        default=None,
+        help="Tier-0 rule version tag forwarded to router arms (v1 | v2-20b | v2-120b). "
+        "Default: omit the flag, so each runner uses its own default (v2-20b, or RTL_ROUTE_RULE). "
+        "v2 rules are only validated with --decider llm.",
+    )
     parser.add_argument("--resume", action="store_true", help="Skip evals with an existing summary.json; forward --resume to runners.")
     parser.add_argument("--dry-run", action="store_true", help="Print deployments and commands without running anything.")
     parser.add_argument(
@@ -461,6 +468,7 @@ def build_eval_command(
             py, str(SCRIPTS / "run_realbench_routed.py"),
             "--router", "cascade",
             "--decider", args.decider,
+            *(["--route-rule", args.route_rule] if args.route_rule else []),
             "--realbench-root", args.realbench_root,
             "--output-dir", str(run_dir),
             "--solution-name", f"{entry['name']}_routed",
@@ -482,6 +490,8 @@ def build_eval_command(
             command += ["--router", "all_direct", "--legacy-max-repair-attempts", "0"]
         else:
             command += ["--router", "cascade", "--decider", args.decider]
+            if args.route_rule:
+                command += ["--route-rule", args.route_rule]
     elif eval_name in ("verilog-eval-pure", "verilog-eval-router"):
         command = [
             py, str(SCRIPTS / "run_agentic_plan_legacy_verilog_eval.py"),
@@ -495,6 +505,8 @@ def build_eval_command(
             command += ["--router", "all_direct", "--legacy-max-repair-attempts", "0"]
         else:
             command += ["--router", "cascade", "--decider", args.decider]
+            if args.route_rule:
+                command += ["--route-rule", args.route_rule]
     elif eval_name in ("mage-verilog-eval", "mage-rtllm", "mage-realbench"):
         benchmark = eval_name.removeprefix("mage-")
         command = [

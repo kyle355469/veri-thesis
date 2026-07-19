@@ -6,42 +6,41 @@
 \section{Motivation}
 \label{sec:intro-motivation}
 
-Large language models have recently shown an explosive growth of
-capability across nearly every domain of study and research --- they
-draft and refactor software systems, accelerate biological discovery,
-and increasingly act as day-to-day research assistants --- and an
-industry has grown around turning that capability into engineering
-practice. Hardware design is one of the most active new directions for
-this wave. Hardware description languages look, superficially, like the
-next domain over from software: Verilog is text, compiles, and has
-testbenches. But the economics of hardware make correctness
-qualitatively harsher --- an RTL bug that reaches silicon is not
-patched, it is respun --- and the daily reality of hardware engineering
-differs from the coding-benchmark ideal in a way that matters more than
-syntax: \emph{real RTL work is dominated by integration and reuse, not
-by writing fresh algorithms}. A working
-chip is assembled from verified IP blocks; the engineer's craft lies in
-instantiating existing modules correctly, honoring interface contracts
-pin for pin, and wiring subsystems whose specifications run to hundreds
-of pages~\citep{keating2002reuse}.
+Large language models have improved quickly across nearly every domain
+of study and research. They draft and refactor software systems,
+accelerate biological discovery, and increasingly act as day-to-day
+research assistants, and an industry has grown around turning that
+capability into engineering practice. Hardware design is one of the
+most active new directions for this work. Hardware description
+languages look, at first glance, like the next domain over from
+software. Verilog is text, it compiles, and it has testbenches. But
+the economics of hardware make correctness far harsher --- an RTL bug
+that reaches silicon is not patched, it is respun --- and the daily
+reality of hardware engineering differs from the coding-benchmark
+ideal in a way that matters more than syntax. \emph{Real RTL work is
+dominated by integration and reuse, not by writing fresh algorithms.}
+A working chip is assembled from verified IP blocks, and the
+engineer's job is to instantiate existing modules correctly, honor
+interface contracts pin for pin, and wire subsystems whose
+specifications run to hundreds of pages~\citep{keating2002reuse}.
 
-Most evaluations of LLM-generated Verilog sidestep exactly this reality:
-they pose small, self-contained modules with no environment to integrate
+Most evaluations of LLM-generated Verilog sidestep this reality. They
+pose small, self-contained modules with no environment to integrate
 against~\citep{liu2023verilogeval, lu2024rtllm}. When we instead evaluate
-on RealBench~\citep{realbench2025} --- 60 module-level tasks carved from
+on RealBench~\citep{realbench2025} --- 60 module-level tasks drawn from
 three real IP projects, scored by a strict compile-and-simulate harness
 --- a capable open-weight model prompted directly compiles on only
 25.0\,\% of tasks and passes 8.3\,\%. The gap between that number and
-usefulness is the subject of this thesis. Our premise is that the gap is
-less about model intelligence than about the \emph{system} around the
-model: whether it is told what already exists, held to the environment's
+usefulness is the subject of this thesis. The gap is less about model
+intelligence than about the \emph{system} around the model --- whether
+the model is told what already exists, held to the environment's
 interface contracts, verified against the scorer's own toolchain, and
 spared work it predictably cannot convert.
 
 \section{Problem Statement}
 \label{sec:intro-problem}
 
-Concretely, this thesis addresses the following problem. Given a
+This thesis addresses the following problem. Given a
 natural-language specification of one Verilog module inside an existing
 project --- with the project's other modules provided as source files,
 and a hidden-logic testbench fixing the module's exact port contract ---
@@ -52,66 +51,93 @@ environment imposes \emph{fatal structural contracts} (re-declaring a
 provided module or missing a testbench port kills the sample outright).
 The tasks are \emph{heterogeneous} --- thin wrapper modules, algorithmic
 datapaths, and thousand-line integrators demand different generation
-strategies. And compute is \emph{finite and local}: every planning step,
+strategies. And compute is \emph{finite and local}. Every planning step,
 repair attempt, and sample competes for the same GPU, so a system that
-cannot decide where its compute converts is a system that mostly wastes
-it.
+cannot decide where its compute converts mostly wastes it.
 
 \section{Contributions}
 \label{sec:intro-contributions}
 
 This thesis makes four contributions, each evaluated on the same
-60-task benchmark under controlled ablations.
+60-task benchmark under controlled ablations. The first two fit
+together as one generation system, shown in
+Figure~\ref{fig:intro-overview}. A router reads each task's
+specification and picks one of two flows. The pipeline flow plans
+first and then generates; the direct flow generates immediately. Both
+flows end in the same verify-and-repair stage.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figures/New-Full.png}
+  \caption[System overview]{Overview of the generation system and its
+    three subsystems. The router (top right) extracts key attributes
+    from the specification and chooses a flow per task. Under the
+    pipeline flow (left), a planning agent splits the specification
+    into sub-specs, summarizes them into structured form, and merges
+    them into a generation plan before any code is written; the direct
+    flow skips planning. Both flows enter the same generate-and-repair
+    stage (bottom left), where a coding agent iterates under
+    Yosys/Verilator and testbench verification backed by a repair
+    cache. Chapter~\ref{ch:03} presents the pipeline and the repair
+    machinery, and Chapter~\ref{ch:04} presents the router.}
+  \label{fig:intro-overview}
+\end{figure}
 
 \begin{enumerate}
   \item \textbf{A two-stage agentic IP-reuse pipeline}
-    (Chapter~\ref{ch:03}): a planning agent that works the task through
+    (Chapter~\ref{ch:03}). A planning agent works the task through
     a suite of IP-reuse tools --- catalog search, candidate inspection
     and scoring, and interface-compatibility verification --- and emits
     a structured reuse plan grounded against a per-task catalog of the
-    modules the environment actually provides, followed by a generator
-    operating under environment-faithful verification and repair. At
+    modules the environment actually provides; a generator then works
+    under environment-faithful verification and repair. At
     temperature~0 the pipeline passes 25.0\,\% of tasks against the
     same model's direct 8.3\,\% ($3.0\times$; syntax $2.5\times$),
     with the entire gain concentrated in the reuse-rich processor-core
     family (Section~\ref{sec:results-headline}).
-  \item \textbf{A cascade router between generation flows}
-    (Chapter~\ref{ch:04}): a two-tier router --- spec-level LLM
-    pre-routing plus a plan probe for the uncertain residue --- that
-    sends integration-shaped tasks to the pipeline and self-contained
-    algorithmic tasks to a cheap direct flow. In its controlled ablation
-    it holds coverage at its base arm's 21 of 60 solved tasks
-    \emph{while reducing} total compute from 213 to 130 hours and
-    per-solved-task token cost from 2.17\,M to 1.35\,M --- the
-    cheapest coverage of any measured arm
+  \item \textbf{A per-task router between generation flows}
+    (Chapter~\ref{ch:04}). An LLM feature extractor reads the
+    specification and chooses, before pipeline-scale compute is spent,
+    between the full pipeline and a cheap direct flow. The decision
+    rule is evaluated in two versions. The original cascade's
+    polarity was fitted to a solution set the benchmark-gaming audit
+    later invalidated; the second rule is re-derived from the cleaned
+    evidence and routes to the pipeline by default, sending only
+    narrow, self-contained computational leaves to direct generation.
+    The re-derived router holds
+    the all-pipeline arm's coverage (21 of 60 tasks solved) with better
+    per-sample quality (pass@1 26.5\,\% vs.\ the fitted rule's
+    21.7\,\%; syntax 76.5\,\% vs.\ 63.5\,\%) and no exposure to
+    the leak, and --- re-scoring the cleaned 120B samples under it ---
+    recovers one task no all-pipeline arm solves
     (Section~\ref{sec:results-routing}).
   \item \textbf{Controlled measurements of the supporting machinery}
-    (Chapter~\ref{ch:06}): a semantic repair cache that lifts syntax
+    (Chapter~\ref{ch:06}). A semantic repair cache lifts syntax
     monotonically (59.4\,\%$\to$66.9\,\%) while concentrating passing
-    samples inside solvable tasks; a repair-budget calibration showing
+    samples inside solvable tasks. A repair-budget calibration shows
     both repair phases converge within their first attempts, so compact
-    budgets capture nearly all attainable value at a fraction of the
-    compute; and a functional repair loop reported as its own
+    budgets keep nearly all of the value at a fraction of the
+    compute. The functional repair loop is reported as its own
     experimental arm because its feedback signal is the scoring oracle
     --- an accounting line this literature rarely draws.
   \item \textbf{A benchmark- and harness-artifact audit methodology}
-    (Section~\ref{sec:results-artifacts}): golden implementations run
-    through the full scoring path to adjudicate persistent zeros, and a
-    screen of generated RTL for benchmark-gaming patterns. The audits
-    uncovered a testbench race that scored byte-perfect S-box
-    implementations as total failures (root-caused and fixed upstream
-    in the benchmark), confirmed other zeros as genuine difficulty,
-    aligned our own repair gate with the scorer --- and caught a
-    prompt-side leak that let directly-prompted samples pass by merely
-    instantiating the benchmark's reference models, an exclusion now
-    applied to every number in this thesis.
+    (Section~\ref{sec:results-artifacts}). Golden implementations are
+    run through the full scoring path to decide whether persistent
+    zeros are real, and generated RTL is screened for benchmark-gaming
+    patterns. The audits found a testbench race that scored
+    byte-perfect S-box implementations as total failures (root-caused
+    and fixed upstream in the benchmark), confirmed the other zeros as
+    genuine difficulty, and aligned our own repair gate with the
+    scorer. They also caught a prompt-side leak that let
+    directly-prompted samples pass by simply instantiating the
+    benchmark's reference models; every number in this thesis excludes
+    those samples.
 \end{enumerate}
 
 Throughout, every claim is tied to a controlled comparison, and results
 are reported with the same care whether they move the headline metric or
-correct it --- the audit that caught a benchmark-gaming pattern in our
-own direct-flow samples is, we argue, as informative as any number it
-revised.
+correct it. The audit that caught a benchmark-gaming pattern in our
+own direct-flow samples is as informative as any number it revised.
 
 \section{Thesis Organization}
 \label{sec:intro-organization}
@@ -120,8 +146,8 @@ Chapter~\ref{ch:02} reviews the background and situates the thesis in
 four research threads. Chapters~\ref{ch:03} and~\ref{ch:04} present the
 pipeline and the router. Chapter~\ref{ch:05} fixes the benchmark,
 models, metrics, and the inventory of every experimental run.
-Chapter~\ref{ch:06} reports results: the headline comparison, the
-ablations, the routing study, a failure taxonomy, and the
-benchmark-artifact audit. Chapter~\ref{ch:07} discusses implications,
+Chapter~\ref{ch:06} reports the results, covering the headline
+comparison, the ablations, the routing study, a failure categorization,
+and the benchmark-artifact audit. Chapter~\ref{ch:07} discusses implications,
 states threats to validity, and concludes. Appendices collect prompt
 templates and per-module result tables.

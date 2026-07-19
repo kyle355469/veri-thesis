@@ -3,20 +3,73 @@
 \appendix{A}{Prompt Templates}
 \label{app:prompts}
 
-This appendix reproduces the load-bearing prompt text of the system, so
-that the mechanisms described in Chapters~\ref{ch:03} and~\ref{ch:04} can
-be audited at the level at which they actually operate. Text is excerpted
-verbatim from the repository (\texttt{agentic\_ip\_reuse/.../prompts.py}
-and \texttt{ip\_reuse\_legacy/prompts.py}); ellipses mark elisions.
+This appendix reproduces the prompt text behind every LLM call in the
+system, so that the mechanisms described in Chapters~\ref{ch:03}
+and~\ref{ch:04} can be audited at the level at which they actually
+operate. Text is excerpted verbatim from the repository
+(\texttt{agentic\_ip\_reuse/.../prompts.py},
+\texttt{ip\_reuse\_legacy/prompts.py}, \texttt{rag\_rtl/routing.py}, and
+the runner scripts). Ellipses mark omissions, values in curly braces are
+placeholders the harness fills at run time, and long lines are re-wrapped
+for the page.
 
-\section{Planner System Prompt (Catalog-Grounding Core)}
+\section{Planner System Prompt}
+\label{app:planner-system}
 
 The planner's system prompt walks the model through the eight planning
-stages and --- decisive in practice --- mandates the closed catalog
-vocabulary:
+stages, declares the tool suite of
+Section~\ref{sec:pipeline-planner}, and --- decisive in practice ---
+mandates the closed catalog vocabulary. The grounding pass described in
+that section enforces the same contract on the returned plan after the
+fact, so the closed vocabulary holds regardless of the trajectory the
+planning agent takes through its tools.
 
-\begin{lstlisting}[language={},caption={Planner system prompt, grounding
-section (excerpt).},label={lst:planner-prompt}]
+\begin{lstlisting}[language={},caption={Planner system
+prompt.},label={lst:planner-prompt}]
+You are an agentic IC design and IP-reuse planning assistant.
+Complete these stages in order:
+1. Decide all system-level requirements: functionality,
+   performance target, I/O interface, and PPA constraints.
+2. Decompose the system into modules. Always check if the spce
+   supply the sub-module list or not, if does supply, directly
+   use it and forward to step 3, else consider Input Interface,
+   Buffer/FIFO, Processing Core, Memory Controller, and Output
+   Interface.
+   ...
+3. Search for reusable IP. Evaluate every candidate against
+   function match, interface compatibility, configurability,
+   verification status, license, synthesis support, and
+   documentation quality.
+4. Understand selected IP interfaces and behavior before
+   integration.
+5. Configure or parameterize selected IPs (data width, buffer
+   depth, modes, clock assumptions).
+6. For modules requiring new RTL: call generate_rtl_module with
+   the complete synthesizable SystemVerilog code. Then call
+   validate_verilog on the generated file. If validation returns
+   errors, fix them and call generate_rtl_module again.
+7. For each pair of connected modules, call
+   check_port_compatibility to confirm direction and bit-width
+   match before writing the integration plan.
+8. Plan simulation, synthesis, and debugging.
+
+Available tools:
+- search_reuse_ip: search the local reusable-IP catalog.
+- inspect_reuse_ip: return behavior, interfaces, parameters,
+  limits, and integration notes for one IP.
+- evaluate_ip_candidate: score a candidate against module
+  requirements.
+- write_artifact: write Markdown or JSON artifacts into the
+  output directory.
+- generate_rtl_module: write a complete synthesizable
+  SystemVerilog module to a .sv file. Provide the full RTL in
+  the verilog_code parameter.
+- validate_verilog: lint a generated .sv file (uses verilator or
+  iverilog). Returns errors and warnings. Self-correct and
+  regenerate if errors are found.
+- check_port_compatibility: parse port declarations from two .sv
+  files and verify direction and width compatibility.
+
 CATALOG GROUNDING (mandatory): The reusable-IP catalog for this
 task is listed verbatim in the user message under "Reusable IP
 catalog". Treat it as the only source of truth for which IPs
@@ -30,20 +83,53 @@ exist.
   name.
 - Produce one reuse_decisions entry for every module that has a
   candidate IP in the catalog.
-...
+
+If no IP satisfies reuse criteria for a module, mark it as
+new_rtl_required, explain which criteria failed, then generate
+the RTL with generate_rtl_module.
 Return final output as one JSON object only, with keys:
 requirements, modules, reuse_decisions, integration_plan,
 verification_plan, debug_plan, unresolved_assumptions.
+Every reply must either call a tool or contain that final JSON
+object. Never reply with working notes, intentions, or partial
+reasoning alone.
 \end{lstlisting}
 
-The user message then carries the injected catalog digest (one line per
-provided module: \texttt{ip\_id}, port summary, one-sentence description)
-and closes with: \emph{``Every reuse\_decisions.selected\_ip must be one
-of the ip\_id values listed in the catalog above; do not invent
-names.''} The post-hoc grounding pass of
-Section~\ref{sec:pipeline-planner} enforces the same contract on the
-returned plan, so the closed vocabulary holds regardless of the
-trajectory the planning agent takes through its tools.
+\section{Planner User Prompt and Catalog Digest}
+\label{app:planner-user}
+
+The user message carries the specification (the planner view when
+condensation ran), the injected catalog digest --- one line per provided
+module with its \texttt{ip\_id}, one-sentence summary, and leading port
+names --- and a closing restatement of the closed-vocabulary rule.
+
+\begin{lstlisting}[language={},caption={Planner user prompt with the
+injected catalog digest.},label={lst:planner-user}]
+Target HDL: {target_hdl}
+
+Known constraints:
+- {constraint lines, or "Follow the user request exactly."}
+
+Known interfaces:
+- {interface lines, or "Discover from the user request."}
+
+PPA targets:
+- {target lines, or "Infer and list assumptions."}
+
+User request:
+{specification; the planner view when condensation ran}
+
+Reusable IP catalog (authoritative - select reuse IPs ONLY from
+these ip_id values):
+- {ip_id}: {one-line summary} | ports: {first 12 port names}
+- ...
+- (+{N} more catalog entries omitted)
+
+Produce a complete IP-reuse design plan. Every
+reuse_decisions.selected_ip must be one of the ip_id values
+listed in the catalog above; do not invent names. Use the
+catalog tools when they can improve reuse decisions.
+\end{lstlisting}
 
 \section{Planner View vs.\ Generation View of a Condensed Specification}
 \label{app:views}
@@ -86,14 +172,329 @@ GENERATION VIEW (writing the RTL)
     context budget keeps what the generator has to build
 \end{lstlisting}
 
-The planner view is thus a reuse-structure lens --- interfaces, reuse
-queries, and a short behavioral digest --- while the generation view is
-a construction lens --- complete requirements for new logic and
+The planner view is thus a reuse-structure lens built from interfaces,
+reuse queries, and a short behavioral digest. The generation view is
+a construction lens, with complete requirements for new logic and
 interface-only contracts for everything provided. This division is also
 what makes the plan informative for routing
-(Section~\ref{sec:router-design}): module characteristics that are
+(Section~\ref{sec:router-design}). Module characteristics that are
 ambiguous in the raw specification arrive in the plan already separated
 into delegation structure and own behavior.
+
+\section{Specification Condensation Prompts}
+\label{app:condense}
+
+The manifest behind both views is built by two LLM stages
+(Section~\ref{sec:pipeline-planner}). Each chunk of the raw
+specification is first reduced to one-layer implementation facts, and
+the partial extracts are then merged into one canonical manifest. Both
+prompts forbid generating RTL and forbid inventing facts, and both keep
+the decomposition to the top module's immediate children.
+
+\begin{lstlisting}[language={},caption={Chunk-partition
+prompt.},label={lst:condense-chunk}]
+Extract one-layer implementation facts from chunk {k} of {n} of
+a large hardware specification.
+Do not generate RTL and do not invent missing facts. Preserve
+exact names, ports, widths, connections, protocols, clocks,
+resets, parameters, conditional requirements, and module
+dependencies. Use "unknown" for unspecified values.
+The expected top module is {top_module}. Target HDL is
+{target_hdl}.
+Extract only immediate children of the top module; do not
+flatten grandchildren into the same module list.
+
+Specification chunk:
+{chunk}
+
+Return only JSON. Use the same manifest fields when present:
+system_summary, clocks, resets, parameters, shared_constraints,
+assumptions, unknowns, top_module, and modules. Omit fields that
+this chunk does not describe.
+\end{lstlisting}
+
+\begin{lstlisting}[language={},caption={Manifest-merge prompt (the
+required JSON shape is abridged).},label={lst:condense-merge}]
+Merge partial large-hardware-specification extracts into one
+canonical one-layer implementation manifest.
+Do not generate RTL. Do not invent facts. Deduplicate compatible
+facts and preserve all exact requirements.
+Resolve conflicts only when one extract is clearly more
+specific; otherwise record the conflict in unknowns.
+The caller-required top module is {top_module} and must be used
+exactly when provided.
+Keep only the top module's immediate children in modules. Do not
+flatten deeper descendants into this manifest.
+
+Target HDL: {target_hdl}
+Extra constraints:
+{constraint lines}
+
+Partial extracts:
+{partial manifests, JSON}
+
+Return only JSON using this complete shape:
+{ system_summary, clocks, resets, parameters,
+  shared_constraints, assumptions, unknowns,
+  top_module: { name, ports (name/direction/width/description),
+                instances (module/instance_name/connections) },
+  modules: [ { name, category, purpose, ports,
+               behavioral_requirements, dependencies,
+               reuse_query } ] }
+\end{lstlisting}
+
+A validation pass runs after the merge; when it reports errors, a
+correction prompt returns the manifest and the error list and asks for a
+corrected manifest under the same no-invention rules.
+
+\section{RTL Generation Prompt and the Shared Context Block}
+\label{app:generation}
+
+The generator prompt (Section~\ref{sec:pipeline-generator}) has a fixed
+header and a context block. The header states the task, the reuse rules,
+and the output format; the context block carries the provided-module
+signatures, the compile-environment notes --- including the testbench
+DUT instantiation as the binding port contract --- and the
+specification; the adapted plan closes the prompt. The same context
+block reappears in both repair prompts
+(Sections~\ref{app:syntax-repair} and~\ref{app:func-repair}), where
+diagnostic-driven slicing may replace the specification inside it
+(Section~\ref{sec:pipeline-slicing}).
+
+\begin{lstlisting}[language={},escapechar=@,caption={RTL generation prompt,
+header and skeleton.},label={lst:gen-prompt}]
+Generate integrated {target_hdl} RTL from this IP reuse plan.
+Use selected reusable IP behavior where appropriate, configure
+or adapt candidates as described, and create new RTL for modules
+marked new.
+Reused modules listed as provided source files must only be
+instantiated, never re-declared in your output.
+Return exactly one fenced {target_hdl} code block and no extra
+prose.
+
+Top module: {top_module}
+
+{shared context block, Listing @\ref{lst:gen-context}@}
+
+IP reuse plan:
+{adapted plan, JSON}
+\end{lstlisting}
+
+\begin{lstlisting}[language={},caption={The shared context block. The
+first three environment notes appear when the task provides the
+corresponding files; the specification is swapped for the
+diagnostic-driven slice in repair prompts when slicing is
+on.},label={lst:gen-context}]
+Provided reusable modules (each is supplied as a separate source
+file in the compile environment; instantiate them using these
+exact module names and port declarations; do NOT re-declare or
+re-implement any of them):
+{module -> port-signature map, JSON}
+
+Compile environment notes:
+- The verification testbench instantiates {top_module} exactly
+  as shown below. Your module must declare every port connected
+  here, with these exact names (a missing port is a fatal
+  PINNOTFOUND elaboration error). Ports inside `ifdef blocks are
+  required whenever the compile environment defines that macro:
+  {testbench DUT instantiation, verbatim}
+- The compile directory provides these defines/include files:
+  {file names}. Reference their macros with a backtick (e.g.
+  `MACRO_NAME) and put the matching `include directive(s) at the
+  top of your file if you use any of those macros.
+- These dependency modules are NOT provided by the compile
+  environment and their full implementation must be included in
+  your output: {module names}. Copy the original source from the
+  reuse plan candidates verbatim when available.
+- All modules listed under provided reusable modules are
+  compiled from their own source files; emitting a module with
+  one of those names will cause a fatal duplicate-declaration
+  error.
+
+Original design specification (authoritative for the top module
+name, exact port names, directions, widths, parameters, reset
+polarity, and behavior - follow it even where the plan
+disagrees):
+{specification; the generation view when condensation ran}
+\end{lstlisting}
+
+\section{Syntax Repair Prompt}
+\label{app:syntax-repair}
+
+When the internal lint fails, the failed tool reports are fed back
+verbatim together with the current candidate
+(Section~\ref{sec:pipeline-cache}). The guidance block appears only on a
+semantic repair-cache hit and is marked advisory; the diagnostics block
+carries each failed tool's name, verdict, and raw output, which is where
+the Verilator error lines the model must act on arrive.
+
+\begin{lstlisting}[language={},escapechar=@,caption={Syntax repair
+prompt.},label={lst:syntax-prompt}]
+Repair this integrated {target_hdl} RTL so it passes syntax and
+lint checks.
+Keep the same IP reuse intent and public top-level behavior.
+Reused modules listed as provided source files must only be
+instantiated, never re-declared in your output.
+Return exactly one fenced {target_hdl} code block and no extra
+prose.
+
+Top module: {top_module}
+
+{shared context block, Listing @\ref{lst:gen-context}@; the
+ specification inside it is replaced by the interface-topic
+ slice when slicing is on}
+
+IP reuse plan:
+{adapted plan, JSON}
+
+Guidance from previously verified fixes of similar diagnostics
+(advisory only; adapt the pattern, do not copy unrelated code or
+module names):
+{cached unified-diff excerpts, on a repair-cache hit}
+
+Diagnostics:
+{failed tool reports, JSON: tool, verdict, raw stdout/stderr}
+
+Current RTL:
+```{target_hdl}
+{current candidate}
+```
+\end{lstlisting}
+
+When the repair loop runs on the direct flow (no plan), the
+reuse-intent line becomes ``Keep the public top-level behavior
+described in the specification.'', and the plan block and reuse rules
+are dropped; the rest of the skeleton is unchanged. This is how the
+router's direct arm shares the pipeline's repair machinery
+(Section~\ref{sec:router-design}).
+
+\section{Functional Repair Prompt}
+\label{app:func-repair}
+
+The functional repair turn (Section~\ref{sec:pipeline-funcrepair})
+re-frames the task as logic repair on a design whose interface is
+already correct. The simulator's mismatch report is inserted verbatim,
+and the behavior-topic slice replaces the specification when slicing is
+on. The same direct-flow variant as in
+Section~\ref{app:syntax-repair} applies.
+
+\begin{lstlisting}[language={},escapechar=@,caption={Functional repair
+prompt.},label={lst:func-prompt}]
+This integrated {target_hdl} RTL compiles cleanly but produces
+outputs that do not match the reference testbench. Fix the
+internal logic so the outputs match.
+Do NOT change the module's port interface (names, directions,
+widths) - it already matches the testbench, so changing it would
+regress. Correct only the behavior/logic.
+Keep the same IP reuse intent. Reused modules listed as provided
+source files must only be instantiated, never re-declared in
+your output.
+Return exactly one fenced {target_hdl} code block and no extra
+prose.
+
+Top module: {top_module}
+
+{shared context block, Listing @\ref{lst:gen-context}@; the
+ specification inside it is replaced by the behavior-topic
+ slice when slicing is on}
+
+IP reuse plan:
+{adapted plan, JSON}
+
+Reference testbench mismatch report (each line names an output,
+its mismatch count, and the first mismatched simulation time -
+concentrate on the logic that drives those outputs around that
+time):
+{verbatim simulator report, e.g. "Output 'b' has 23 mismatches.
+ First mismatch occurred at time 115."}
+
+Current RTL:
+```{target_hdl}
+{current candidate}
+```
+\end{lstlisting}
+
+\section{Direct-Flow Generation Prompt}
+\label{app:direct}
+
+The pure-model baseline and the router's direct arm
+(Sections~\ref{sec:setup-runs} and~\ref{sec:router-design}) use one
+prompt, assembled by the direct runner. The provided-helper note names
+only genuine dependency modules; evaluation collateral --- the
+\texttt{ref\_*} golden model, testbench, and stimulus --- is excluded
+from that vocabulary, so the prompt never names the files behind the
+reference-wrapping loophole audited in
+Section~\ref{sec:results-routing}.
+
+\begin{lstlisting}[language={},caption={Direct-flow generation
+prompt.},label={lst:direct-prompt}]
+Generate the requested RealBench RTL implementation directly
+from the problem statement.
+
+Target HDL: {target_hdl}
+Required public top module name: {top_module}
+
+Constraints:
+{task constraint lines}
+- Return only synthesizable RTL source code.
+- Do not include a testbench, explanations, markdown fences, or
+  analysis text.
+
+The RealBench verification directory already provides these
+helper modules. Do not redeclare them in your output unless the
+problem explicitly requires a replacement: {module names}.
+
+### RealBench Problem
+{problem specification, clipped to the prompt budget}
+\end{lstlisting}
+
+\section{Router Feature-Extraction Prompt}
+\label{app:router-prompt}
+
+Tier-0 of the cascade router (Section~\ref{sec:router-design}) is one
+LLM call. The specification is appended after this header, and the
+returned JSON carries the seven judgments plus a confidence value; the
+keyword ablation baseline extracts the same fields by pattern matching.
+
+\begin{lstlisting}[language={},caption={Tier-0 routing feature-extraction
+prompt.},label={lst:router-prompt}]
+You are a routing feature extractor for an RTL code-generation
+pipeline.
+Read the ENTIRE Verilog module specification below and judge,
+for THIS module only, whether the substantive logic must be
+IMPLEMENTED in this module or is DELEGATED to instantiated
+sub-modules / is trivially thin.
+
+A module can SOUND like it computes (e.g. "preliminary
+decoding") yet actually be a wrapper that instantiates another
+module and passes signals through. Read the whole spec
+(including Registers / Submodule sections) before deciding.
+
+Return ONLY a single JSON object, no prose, with exactly these
+fields:
+{
+  "delegates_to_submodules": boolean,  // mainly instantiates/
+                     // encapsulates/integrates sub-modules
+  "is_memory": boolean,       // RAM / memory encapsulation
+  "thin_control": boolean,    // pure combinational control or
+                     // field routing; "does not perform
+                     // calculations"
+  "has_fsm": boolean,         // multi-state finite state
+                     // machine / multi-cycle control
+  "has_cdc": boolean,         // clock-domain crossing / async
+                     // FIFO / synchronizers
+  "has_algorithm": boolean,   // datapath algorithm: encryption
+                     // rounds, CRC, full instruction decode,
+                     // address arithmetic
+  "est_state_bits": integer,  // rough number of state/register
+                     // bits THIS module itself must hold
+                     // (0 for pure wrappers)
+  "confidence": number        // 0..1 confidence in the above
+}
+
+SPECIFICATION:
+{full module specification}
+\end{lstlisting}
 
 \section{Specifications Routed as Uncertain}
 \label{app:uncertain}
@@ -110,7 +511,7 @@ self-descriptions show the common character:
   \item[\texttt{sd\_bd}] ``manages the buffer descriptors used for data
     transmission and reception between the system memory and the SD
     card \dots\ implements a circular buffer of descriptors'' --- a
-    descriptor store with pointer bookkeeping: neither a wrapper nor a
+    descriptor store with pointer bookkeeping, neither a wrapper nor a
     nameable algorithm.
   \item[\texttt{sd\_data\_serial\_host}] ``the interface towards the
     physical SD card device Data port'' --- a serial engine mixing
@@ -125,51 +526,11 @@ self-descriptions show the common character:
     datapath, neither self-contained nor delegating.
   \item[\texttt{e203\_exu\_wbck}] ``arbitrates between the write-back
     requests from the ALU and long-pipeline instructions'' --- an
-    arbiter: modest own state, no submodules, no algorithm by name.
+    arbiter with modest own state, no submodules, and no algorithm by name.
 \end{description}
 
 The shared shape --- \emph{interface-arbitration modules that mediate
 between protocols} --- is a coherent third type of question sitting
-between the two classes, and it is exactly the population the plan
-probe is designed to adjudicate: once a plan exists, the presence or
+between the two classes. It is exactly the population the plan
+probe is designed to rule on, because once a plan exists, the presence or
 absence of delegation structure becomes explicit.
-
-\section{Generation Prompt Structure}
-
-The generator prompt is assembled from five blocks, in order: (1)~the
-(possibly condensed) specification; (2)~the source of every reused module,
-prefixed with the environment note that these modules \emph{are provided
-as files and must be instantiated, never re-declared}; (3)~environment
-notes (macros defined by the build, the one not-shipped dependency);
-(4)~the testbench's DUT instantiation, verbatim, introduced as the binding
-port contract; and (5)~the output-format instruction (one complete Verilog
-module in a fenced code block).
-
-\section{Functional Repair Prompt}
-
-The functional repair turn (Section~\ref{sec:pipeline-funcrepair})
-re-frames the task as logic repair on a design whose interface is already
-correct. Its distinctive elements:
-
-\begin{lstlisting}[language={},caption={Functional repair prompt, framing
-(paraphrased structure; mismatch report inserted verbatim).},label={lst:func-prompt}]
-The following {target_hdl} design COMPILES and matches the
-required port interface, but its outputs MISMATCH the reference
-testbench:
-
-<verbatim simulator mismatch report, e.g.
- "Output 'b' has 23 mismatches. First mismatch at time 115.">
-
-Fix the LOGIC only. Do not change the module name or the port
-list. Reused modules listed as provided source files must only
-be instantiated, never re-declared in your output.
-
-<behavioral slice: specification sections mentioning the
- mismatching output identifiers, plus verbatim interface
- excerpts (Section 3.4.3); full spec if no identifier named>
-\end{lstlisting}
-
-When the repair loop runs on the direct flow (no plan), the reuse-framing
-block is dropped and the same skeleton applies --- the mechanism by which
-the router's direct arm shares the pipeline's repair machinery
-(Section~\ref{sec:router-design}).

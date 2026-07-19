@@ -22,6 +22,13 @@ Routing arms (``--router``), identical decision logic to the RealBench cascade r
 * ``cascade``    -- Tier-0 routes confident tasks; ``uncertain`` enters the pipeline with
                     the plan-probe enabled. (default)
 
+The Tier-0 decision rule is versioned by tag (``--route-rule`` / ``RTL_ROUTE_RULE``,
+default ``v2-20b``): ``v1`` = legacy complementary polarity (reproduces pre-Jul-2026
+runs, ``uncertain`` cascades to the plan-probe); ``v2-20b``/``v2-120b`` = wrap-cleaned
+pipeline-default rule (total: never ``uncertain``, so ``pre`` and ``cascade`` coincide),
+validated with ``--decider llm``. The tag is recorded in routing/plan.json, every
+record, and summary.json.
+
 The direct flow skips planning, not repair: directly generated RTL gets the same
 syntax/lint (+ optional functional) repair budget via agent.repair_rtl(plan=None).
 
@@ -172,6 +179,16 @@ def add_router_args(parser: argparse.ArgumentParser) -> None:
     """Router arms shared by the spec/RTLLM/verilog-eval runners."""
     parser.add_argument("--router", choices=ROUTERS, default="cascade")
     parser.add_argument("--decider", choices=["keyword", "llm"], default="keyword")
+    parser.add_argument(
+        "--route-rule",
+        choices=sorted(routing.ROUTE_RULES),
+        default=os.getenv("RTL_ROUTE_RULE", "v2-20b"),
+        help="Tier-0 rule version tag (pre/cascade arms). 'v1' = legacy complementary polarity "
+        "(reproduces pre-Jul-2026 runs, cascades to the plan-probe on 'uncertain'); "
+        "'v2-20b'/'v2-120b' = wrap-cleaned pipeline-default rule (total: no uncertain, no probe), "
+        "validated with --decider llm. Also settable via RTL_ROUTE_RULE; the tag is recorded in "
+        "routing/plan.json, every record, and summary.json.",
+    )
     parser.add_argument(
         "--confidence-tau",
         type=float,
@@ -853,16 +870,26 @@ def run_pipeline_flow(
 # --------------------------------------------------------------------------- #
 
 
+_V2_DECIDER_WARNED = False
+
+
 def tier0_route(task: SpecTask, args: argparse.Namespace, output_dir: Path) -> Dict[str, Any]:
     """Tier-0 decision for the whole run (per-task, spec-only), same arms as
-    run_realbench_routed.plan_routing. Returns flow/probe/meta."""
+    run_realbench_routed.plan_routing. Returns flow/probe/meta (incl. the resolved
+    ``route_rule`` tag, so plan.json audits which rule version decided)."""
+    global _V2_DECIDER_WARNED
     router = args.router
+    rule_tag, _ = routing.resolve_route_rule(getattr(args, "route_rule", None))
     if router == "all_pipeline":
-        return {"flow": "pipeline", "probe": False, "routed_by": "none", "route_decision": "pipeline", "route_features": None}
+        return {"flow": "pipeline", "probe": False, "routed_by": "none", "route_decision": "pipeline", "route_features": None, "route_rule": rule_tag}
     if router == "all_direct":
-        return {"flow": "direct", "probe": False, "routed_by": "none", "route_decision": "direct", "route_features": None}
+        return {"flow": "direct", "probe": False, "routed_by": "none", "route_decision": "direct", "route_features": None, "route_rule": rule_tag}
     if router == "plan_probe":
-        return {"flow": "pipeline", "probe": True, "routed_by": "plan_probe", "route_decision": None, "route_features": None}
+        return {"flow": "pipeline", "probe": True, "routed_by": "plan_probe", "route_decision": None, "route_features": None, "route_rule": rule_tag}
+    if rule_tag.startswith("v2") and args.decider != "llm" and not _V2_DECIDER_WARNED:
+        _V2_DECIDER_WARNED = True
+        print("[route] WARNING: v2 rules gate on est_state_bits, which the keyword decider "
+              "always leaves at 0 -- v2 is only validated with --decider llm", file=sys.stderr)
     feature_client = None
     if args.decider == "llm":
         feature_client = PlanningVllmClient(
@@ -873,7 +900,7 @@ def tier0_route(task: SpecTask, args: argparse.Namespace, output_dir: Path) -> D
         )
     cache_dir = output_dir / "routing" / "cache"
     decision, feats = routing.route_pre(
-        task.prompt, args.decider, feature_client, cache_dir, force=(router == "pre")
+        task.prompt, args.decider, feature_client, cache_dir, force=(router == "pre"), rule=rule_tag
     )
     if router == "pre" or decision != "uncertain":
         return {
@@ -882,9 +909,10 @@ def tier0_route(task: SpecTask, args: argparse.Namespace, output_dir: Path) -> D
             "routed_by": f"pre_{args.decider}",
             "route_decision": decision,
             "route_features": feats.to_dict(),
+            "route_rule": rule_tag,
         }
-    # cascade + uncertain -> pipeline with the Tier-1 plan-probe enabled.
-    return {"flow": "pipeline", "probe": True, "routed_by": "plan_probe", "route_decision": None, "route_features": feats.to_dict()}
+    # cascade + uncertain -> pipeline with the Tier-1 plan-probe enabled (v1 only; v2 is total).
+    return {"flow": "pipeline", "probe": True, "routed_by": "plan_probe", "route_decision": None, "route_features": feats.to_dict(), "route_rule": rule_tag}
 
 
 def generate_with_router(
@@ -1058,6 +1086,7 @@ def run_one(
         "spec_condensed": spec_condensed,
         "router": args.router,
         "decider": args.decider,
+        "route_rule": route.get("route_rule"),
         "flow": flow_taken,
         "route_decision": route_decision,
         "routed_by": routed_by,
@@ -1108,6 +1137,7 @@ def summarize(records: Sequence[Dict[str, Any]], args: argparse.Namespace, elaps
         "pipeline": "agentic_ip_reuse_plan_to_ip_reuse_legacy_rtl",
         "router": args.router,
         "decider": args.decider,
+        "route_rule": getattr(args, "route_rule", routing.DEFAULT_ROUTE_RULE),
         "num_records": total,
         "generated": sum(1 for record in records if record.get("generated")),
         "syntax": sum(1 for record in records if record.get("syntax") == 1),
