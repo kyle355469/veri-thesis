@@ -19,17 +19,17 @@ directly from each run's records by
   \caption[Per-module pass counts across runs]{Passing samples / generated
     samples per module task. ``--'' = task absent from the run. Columns
     straddle the June-25 S-box testbench repair
-    (Section~\ref{sec:results-artifacts}); \textsc{Router-2t} postdates
+    (Section~\ref{sec:results-artifacts}); \textsc{Router-v1} postdates
     it and the other four columns predate it, so the
     \texttt{aes\_sbox}/\texttt{aes\_inv\_sbox} rows are not comparable
     across columns.}
   \label{tab:module-appendix} \\
   \toprule
-  Module & \textsc{Direct-t0} & \textsc{Pipe-t0} & \textsc{Cache-off} & \textsc{Pipe-120b} & \textsc{Router-2t} \\
+  Module & \textsc{Direct-t0} & \textsc{Pipe-t0} & \textsc{Cache-off} & \textsc{Pipe-120b} & \textsc{Router-v1} \\
   \midrule
   \endfirsthead
   \toprule
-  Module & \textsc{Direct-t0} & \textsc{Pipe-t0} & \textsc{Cache-off} & \textsc{Pipe-120b} & \textsc{Router-2t} \\
+  Module & \textsc{Direct-t0} & \textsc{Pipe-t0} & \textsc{Cache-off} & \textsc{Pipe-120b} & \textsc{Router-v1} \\
   \midrule
   \endhead
   \bottomrule
@@ -71,7 +71,7 @@ python scripts/run_realbench_routed.py \
   --router cascade --decider llm --route-rule v1 --samples 10 \
   --output-dir runs/Full-2T_router_oss20B_sync6_func4
 
-# Re-derived rule (Router-v2: pipeline-default carve-out, no probe)
+# Re-derived rule (Router-v2: planning-default carve-out, no probe)
 python scripts/run_realbench_routed.py \
   --router cascade --decider llm --route-rule v2-20b --samples 10 \
   --output-dir runs/Full-2T_router_oss20B_syn6_func4_s10_t02_v2

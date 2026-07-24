@@ -58,61 +58,62 @@ cannot decide where its compute converts mostly wastes it.
 \section{Contributions}
 \label{sec:intro-contributions}
 
-This thesis makes four contributions, each evaluated on the same
-60-task benchmark under controlled ablations. The first two fit
-together as one generation system, shown in
-Figure~\ref{fig:intro-overview}. A router reads each task's
-specification and picks one of two flows. The pipeline flow plans
-first and then generates; the direct flow generates immediately. Both
-flows end in the same verify-and-repair stage.
+This thesis makes three contributions, each evaluated on the same
+60-task benchmark under controlled ablations. The first is a complete
+generation system, shown in Figure~\ref{fig:intro-overview}. A router
+reads each task's specification and picks one of two flows. The
+planning flow plans first and then generates; the direct flow
+generates immediately. Both flows end in the same verify-and-repair
+stage.
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\textwidth]{figures/New-Full.png}
+  \includegraphics[width=\textwidth]{figures/Full-arch.png}
   \caption[System overview]{Overview of the generation system and its
-    three subsystems. The router (top right) extracts key attributes
-    from the specification and chooses a flow per task. Under the
-    pipeline flow (left), a planning agent splits the specification
-    into sub-specs, summarizes them into structured form, and merges
-    them into a generation plan before any code is written; the direct
-    flow skips planning. Both flows enter the same generate-and-repair
-    stage (bottom left), where a coding agent iterates under
-    Yosys/Verilator and testbench verification backed by a repair
-    cache. Chapter~\ref{ch:03} presents the pipeline and the repair
-    machinery, and Chapter~\ref{ch:04} presents the router.}
+    three subsystems. The router (top left) reads the specification
+    and picks a flow per task, from the router agent's key attributes
+    under the v1 rule or from parsed port, length, and state gates
+    under the v2 rule. Under the planning flow (bottom left), a
+    planning agent splits the specification into sub-specs,
+    summarizes them into structured form, and merges them into a
+    generation plan, with closed-vocabulary grounding against a
+    per-task IP catalog, before any code is written; the direct flow
+    skips planning. Both flows enter the same generate-and-repair
+    stage (top right), where a coding agent iterates under Verilator
+    and testbench verification backed by a repair cache. The
+    abstract-flow inset (bottom right) compresses the three stages
+    into the path a task traverses. Chapter~\ref{ch:03} presents all
+    three subsystems --- the planning flow, the repair machinery, and
+    the router.}
   \label{fig:intro-overview}
 \end{figure}
 
 \begin{enumerate}
-  \item \textbf{A two-stage agentic IP-reuse pipeline}
-    (Chapter~\ref{ch:03}). A planning agent works the task through
-    a suite of IP-reuse tools --- catalog search, candidate inspection
-    and scoring, and interface-compatibility verification --- and emits
-    a structured reuse plan grounded against a per-task catalog of the
-    modules the environment actually provides; a generator then works
-    under environment-faithful verification and repair. At
-    temperature~0 the pipeline passes 25.0\,\% of tasks against the
-    same model's direct 8.3\,\% ($3.0\times$; syntax $2.5\times$),
-    with the entire gain concentrated in the reuse-rich processor-core
-    family (Section~\ref{sec:results-headline}).
-  \item \textbf{A per-task router between generation flows}
-    (Chapter~\ref{ch:04}). An LLM feature extractor reads the
-    specification and chooses, before pipeline-scale compute is spent,
-    between the full pipeline and a cheap direct flow. The decision
-    rule is evaluated in two versions. The original cascade's
-    polarity was fitted to a solution set the benchmark-gaming audit
-    later invalidated; the second rule is re-derived from the cleaned
-    evidence and routes to the pipeline by default, sending only
-    narrow, self-contained computational leaves to direct generation.
-    The re-derived router holds
-    the all-pipeline arm's coverage (21 of 60 tasks solved) with better
-    per-sample quality (pass@1 26.5\,\% vs.\ the fitted rule's
-    21.7\,\%; syntax 76.5\,\% vs.\ 63.5\,\%) and no exposure to
-    the leak, and --- re-scoring the cleaned 120B samples under it ---
-    recovers one task no all-pipeline arm solves
+  \item \textbf{A two-stage agentic IP-reuse pipeline with per-task
+    flow routing} (Chapter~\ref{ch:03}). A planning agent works the
+    task through a suite of IP-reuse tools --- catalog search,
+    candidate inspection and scoring, and interface-compatibility
+    verification --- and emits a structured reuse plan grounded
+    against a per-task catalog of the modules the environment actually
+    provides; a generator then works under environment-faithful
+    verification and repair. At temperature~0 the pipeline passes
+    25.0\,\% of tasks against the same model's direct 8.3\,\%
+    ($3.0\times$; syntax $2.5\times$), with the gain concentrated
+    almost entirely in the reuse-rich processor-core family
+    (Section~\ref{sec:results-headline}). In front of the planning flow
+    sits a per-task router (Section~\ref{sec:pipeline-routing}), an
+    LLM feature extractor that reads the specification and chooses,
+    before planning-scale compute is spent, between the full planning flow
+    and a cheap direct flow. The original routing rule was fitted to a
+    solution set the benchmark-gaming audit later invalidated;
+    re-derived from the cleaned evidence, the rule routes to the
+    planning flow by default, sends only narrow self-contained
+    computational leaves to direct generation, and matches the
+    coverage of the rule it replaces (21 of 60 tasks solved) with better
+    per-sample quality and no exposure to the leak
     (Section~\ref{sec:results-routing}).
   \item \textbf{Controlled measurements of the supporting machinery}
-    (Chapter~\ref{ch:06}). A semantic repair cache lifts syntax
+    (Chapter~\ref{ch:05}). A semantic repair cache lifts syntax
     monotonically (59.4\,\%$\to$66.9\,\%) while concentrating passing
     samples inside solvable tasks. A repair-budget calibration shows
     both repair phases converge within their first attempts, so compact
@@ -126,8 +127,10 @@ flows end in the same verify-and-repair stage.
     zeros are real, and generated RTL is screened for benchmark-gaming
     patterns. The audits found a testbench race that scored
     byte-perfect S-box implementations as total failures (root-caused
-    and fixed upstream in the benchmark), confirmed the other zeros as
-    genuine difficulty, and aligned our own repair gate with the
+    and fixed upstream in the benchmark), exposed a second benchmark
+    defect whose golden model fails its own scoring build, confirmed
+    the other zeros as genuine difficulty, and located the warning
+    classes on which our own repair gate is stricter than the
     scorer. They also caught a prompt-side leak that let
     directly-prompted samples pass by simply instantiating the
     benchmark's reference models; every number in this thesis excludes
@@ -143,11 +146,13 @@ own direct-flow samples is as informative as any number it revised.
 \label{sec:intro-organization}
 
 Chapter~\ref{ch:02} reviews the background and situates the thesis in
-four research threads. Chapters~\ref{ch:03} and~\ref{ch:04} present the
-pipeline and the router. Chapter~\ref{ch:05} fixes the benchmark,
+four research threads. Chapter~\ref{ch:03} presents the methodology
+--- the two-stage planning flow, its repair machinery, and the cascade
+router between the planning flow and a cheap direct flow.
+Chapter~\ref{ch:04} fixes the benchmark,
 models, metrics, and the inventory of every experimental run.
-Chapter~\ref{ch:06} reports the results, covering the headline
+Chapter~\ref{ch:05} reports the results, covering the headline
 comparison, the ablations, the routing study, a failure categorization,
-and the benchmark-artifact audit. Chapter~\ref{ch:07} discusses implications,
+and the benchmark-artifact audit. Chapter~\ref{ch:06} discusses implications,
 states threats to validity, and concludes. Appendices collect prompt
 templates and per-module result tables.

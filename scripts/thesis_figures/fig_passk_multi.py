@@ -10,9 +10,9 @@ from common import (AQUA, BLUE, GREEN, INK, MUTED, RED, VIOLET, YELLOW,
                     despine, load_records, pass_at_k, per_task_counts, save)
 
 # Last field: vertical label offset (points) to dodge coinciding endpoints
-# after ref-wrap cleaning (Router-2T and Pipe-120B both end at 35.0).
+# after ref-wrap cleaning (Router-v1 and Pipe-120B both end at 35.0).
 RUNS = [
-    ("Full-2T_router_oss20B_sync6_func4", "Router-2T", VIOLET, "-", 7),
+    ("Full-2T_router_oss20B_sync6_func4", "Router-v1", VIOLET, "-", 7),
     ("hybrid_oss20b_10syn_10func_rep_spec", "Hybrid", GREEN, "-", -7),
     ("repair_spec_slice_oss20b_func_v2_time-err-off_10syn_10func",
      "Func-10/10", YELLOW, "-", 0),

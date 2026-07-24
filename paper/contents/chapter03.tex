@@ -1,12 +1,15 @@
 % !TeX root = ../main.tex
 
-\chapter{A Two-Stage Agentic IP-Reuse Pipeline}
+\chapter{A Two-Stage Agentic IP-Reuse Pipeline with Cascade Routing}
 \label{ch:03}
 
-This chapter presents the first contribution of the thesis, a two-stage
-agentic pipeline that generates RTL by first \emph{planning} which existing
-IP blocks to reuse and how to integrate them, and only then generating
-Verilog under a verify-and-repair loop.
+This chapter presents the generation methodology of the thesis. Its
+core is a two-stage agentic pipeline that generates RTL by first
+\emph{planning} which existing IP blocks to reuse and how to integrate
+them, and only then generating Verilog under a verify-and-repair loop.
+A per-task cascade router completes the methodology by deciding,
+before the expensive planning machinery runs, whether a task needs it
+at all.
 
 The motivation for the two-stage split is the way large language models
 are usually used, and the way that habit fails on tasks of this
@@ -34,28 +37,16 @@ Sections~\ref{sec:pipeline-planner} and~\ref{sec:pipeline-generator} describe
 the two stages. Section~\ref{sec:pipeline-repair} describes the three repair
 mechanisms layered on the generator --- the syntax repair loop with a
 semantic repair cache, the functional repair loop, and diagnostic-driven
-specification slicing. Design decisions are motivated here; their empirical
-evaluation is deferred entirely to Chapter~\ref{ch:06}.
+specification slicing. Section~\ref{sec:pipeline-routing} presents the
+cascade router that chooses per task between this planning flow and a cheap
+direct flow. Design decisions are motivated here; their empirical
+evaluation is deferred entirely to Chapter~\ref{ch:05}.
 
 \section{Overview and Environmental Contracts}
 \label{sec:pipeline-overview}
 
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\textwidth]{figures/Pure-pipeline.png}
-  \caption[Two-stage pipeline dataflow]{Dataflow of the two-stage
-    pipeline. The specification is split into sub-specs and summarized
-    into structured form, which the planning agent merges into a
-    generation plan (left). The coding agent consumes the plan and
-    produces RTL inside a Yosys/Verilator syntax repair loop backed by
-    the semantic repair cache, followed by testbench-driven functional
-    repair through the debugging agent (right). Interface and behavior
-    slices of the specification feed the verification and repair loops.}
-  \label{fig:pipeline-flow}
-\end{figure}
-
 The pipeline processes one benchmark task end-to-end as follows
-(Figure~\ref{fig:pipeline-flow}):
+(Figure~\ref{fig:intro-overview}):
 
 \begin{enumerate}
   \item \textbf{Catalog construction.} The dependency sources that the
@@ -64,6 +55,11 @@ The pipeline processes one benchmark task end-to-end as follows
     carrying its name, port list, and source. The catalog is the
     pipeline's model of what the test environment supplies, and every
     downstream reuse decision is expressed in its vocabulary.
+  \item \textbf{Routing.} The cascade router
+    (Section~\ref{sec:pipeline-routing}) reads the specification and
+    decides which flow the task takes. Integration-shaped tasks run
+    the planning flow of steps 3--5; narrow self-contained tasks skip
+    straight to step~5 and generate from the specification alone.
   \item \textbf{Planning.} The planner (Section~\ref{sec:pipeline-planner})
     reads the specification and the catalog and emits a structured IP-reuse
     plan consisting of requirements, module decomposition, a reuse decision per submodule
@@ -107,7 +103,23 @@ of IP-reuse tools scoped to the per-task catalog, and returns a structured
 JSON plan with a fixed schema --- requirement summary, module
 decomposition, per-module reuse decisions (\texttt{selected\_ip} naming a
 catalog entry, or \texttt{new\_rtl\_required}), and integration,
-verification, and debugging plans.
+verification, and debugging plans. Figure~\ref{fig:planning-flow} shows
+the stage's dataflow.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figures/planning-new.png}
+  \caption[Planning stage dataflow]{Dataflow of the planning stage.
+    Large specifications are split into sub-specs and summarized
+    chunk-by-chunk into partial structured summaries (the condensation
+    described later in this section). While planning, the agent
+    queries the per-task IP catalog and reads back submodule interface
+    information, and a merge pass turns the partial summaries into the
+    generation plan. Closed-vocabulary grounding then resolves every
+    reuse decision against the catalog and releases the final plan to
+    the generator.}
+  \label{fig:planning-flow}
+\end{figure}
 
 \paragraph{The IP-reuse tool suite.}
 Four tools carry the reuse workflow. \texttt{search\_reuse\_ip} queries
@@ -168,7 +180,7 @@ catalog. Together we call them \emph{grounding-by-construction}:
     once, and the more complete of the two attempts is kept.
 \end{enumerate}
 
-Chapter~\ref{ch:06} (Section~\ref{sec:results-grounding}) audits the effect.
+Chapter~\ref{ch:05} (Section~\ref{sec:results-grounding}) audits the effect.
 Grounding eliminates hallucinated names from plans entirely, making every
 plan \emph{correct and auditable}, while the end-to-end pass rate stays
 essentially level. The generator was already robust to imperfect names
@@ -199,6 +211,29 @@ and the testbench DUT instantiation as the interface contract. Generated
 text is parsed for a Verilog code block; provided dependency modules that
 the model re-declared anyway are stripped before verification. The full
 prompt template is reproduced in Appendix~\ref{app:prompts}.
+Figure~\ref{fig:codegen-flow} shows the stage's dataflow, including the
+repair machinery that Section~\ref{sec:pipeline-repair} describes.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figures/code-gen-new.png}
+  \caption[Generation and repair dataflow]{Dataflow of the generation
+    and repair stage. The coding agent produces a candidate module,
+    which Verilator lints against the same file set the benchmark
+    compiles. Lint diagnostics are matched against the semantic repair
+    cache and fed, with any cached fix hints, to the debugging agent
+    for syntax repair. A parser splits the specification into
+    interface- and behavior-topic slices; the interface slice feeds
+    syntax repair and the behavior slice functional repair
+    (Section~\ref{sec:pipeline-slicing}). Syntax-verified candidates
+    are simulated against the testbench, whose mismatch reports drive
+    the functional repair loop (off by default,
+    Section~\ref{sec:pipeline-funcrepair}). The surviving candidate
+    exits as the final RTL. In the planning flow the coding prompt
+    additionally carries the final plan
+    (Figure~\ref{fig:intro-overview}).}
+  \label{fig:codegen-flow}
+\end{figure}
 
 \paragraph{Internal verification mirrors the benchmark.}
 The generator's inner loop lints each candidate with Verilator against the
@@ -245,16 +280,16 @@ repair loops is reproduced in Appendix~\ref{app:prompts}.
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=0.85\textwidth]{figures/repair-loop-light.png}
-  \caption[Generator verify--repair loops]{The generator's two-gate
-    verify--repair structure. The generation plan and the specification's
-    interface- and behavior-topic slices feed the agentic generator;
-    each candidate is first verified with Yosys/Verilator, whose
-    diagnostics drive the syntax repair loop, and only then simulated
-    against the testbench, whose mismatch reports drive the functional
-    repair loop (off by default; Section~\ref{sec:pipeline-funcrepair}).
-    Interface-topic slices feed the syntax loop and behavior-topic
-    slices the functional loop (Section~\ref{sec:pipeline-slicing}).}
+  \includegraphics[width=\textwidth]{figures/rep-arch.png}
+  \caption[Repair architecture]{The repair architecture. A candidate is
+    first verified with Yosys/Verilator; its diagnostics, any similar
+    cached repairs (Section~\ref{sec:pipeline-cache}), and the
+    specification's interface-topic slice feed the debugging agent. A
+    syntax-verified candidate is then simulated against the testbench,
+    whose mismatch report and the behavior-topic slice feed the same
+    agent (off by default; Section~\ref{sec:pipeline-funcrepair}). The
+    agent returns a new candidate that re-enters verification, up to
+    the repair budget.}
   \label{fig:repair-loop}
 \end{figure}
 
@@ -274,8 +309,7 @@ entries are injected into the repair prompt --- \emph{advisory only}, never
 auto-applied, and never sourced from benchmark reference code. The cache
 has three scopes: \texttt{off}, \texttt{task} (shared only across one
 task's samples), and \texttt{run} (shared across the whole run). Run scope
-maximizes hint availability but couples a task's samples, which corrupts
-pass@k's independence assumption. The trade-off is measured in
+maximizes hint availability; what each scope buys is measured in
 Section~\ref{sec:results-cache}.
 
 \subsection{Functional Repair Loop}
@@ -329,9 +363,321 @@ within the first few attempts of both loops, so each rescue is reached
 at a fraction of the full-specification token cost per attempt.
 
 
+\section{Cascade Routing between Direct and Planning Flows}
+\label{sec:pipeline-routing}
+
+The planning flow is not the cheapest way to solve every task. Comparing it
+task by task with \emph{direct} generation --- a single-shot prompt
+with no plan --- shows that the two flows have sharply different
+economics. The planning flow's coverage subsumes the direct flow's, but at
+an order of magnitude more tokens per sample, and its planning
+machinery, decisive on integration problems, is measurably
+counterproductive on self-contained algorithm and FSM design, exactly
+where the cheap flow matches it. This division matches the purpose of
+the thesis. IP-reuse problems mostly need several existing modules
+arranged and integrated correctly, which is where the plan pays. The
+residual algorithmic tasks are served equally well, and far more
+cheaply, by direct generation. The final component of the methodology
+is therefore a per-task \emph{cascade router} that predicts, before
+planning-scale compute is spent, which of the two flows a task should
+take. Section~\ref{sec:router-motivation} establishes why the two
+flows are complementary; Section~\ref{sec:router-classes} defines the
+task classes and the oracle labels used to evaluate routing; and
+Section~\ref{sec:router-design} describes the two-tier cascade and the
+metrics it is scored on.
+
+\subsection{Motivation: Two Complementary Flows}
+\label{sec:router-motivation}
+
+Running \emph{both} flows on all 60 tasks (the \textsc{Hybrid} arm of
+Table~\ref{tab:run-inventory}) motivates routing. With ten samples per
+flow, the planning flow solves 20 tasks; the direct flow solves 11 ---
+every one of them also solved by the planning flow. Coverage,
+then, does not argue for keeping a direct flow at all --- cost does.
+Wrapper and integration modules pass only under the planning flow, which
+supplies the exact interfaces of the submodules they must instantiate
+and wire. Self-contained algorithmic modules pass under direct
+generation too, in one coherent piece, at roughly a tenth of a planning-flow
+sample's token cost. On exactly those tasks the
+planning machinery is measurably counterproductive, as the next
+paragraph details. One flow dominates on \emph{ability}; it is far from
+dominant on \emph{cost per solved task}.
+
+\paragraph{Why planning is overhead on algorithm/FSM tasks.}
+That the planning flow converts poorly on algorithmic and FSM tasks is
+measurable in the \textsc{Hybrid} run's own planning flow. On tasks
+whose specification centers on a state machine, compiling samples
+convert to passes at 16.2\,\%, against 43.1\,\% elsewhere. This is not
+an implementation accident; it follows from what planning does. First,
+decomposition fragments coherence. A state machine or an arithmetic
+datapath is one tightly coupled artifact. A plan that splits it into
+submodule pieces forces the generator to implement fragments and glue
+where a single \texttt{always}-block idiom --- exactly the pattern the
+model knows best from pretraining --- would have expressed the whole
+behavior (compiling samples that follow the plan's multi-module
+decomposition pass at 12.5\,\%, against 35.3\,\% for single-module
+outputs). Second, the plan is a paraphrase. It restates the
+specification's behavior in summarized form, and for algorithmic logic
+the value lives in exact details (encodings, priorities, edge conditions)
+that summarization inevitably coarsens. The generator then optimizes
+toward the paraphrase rather than the source. Third, the plan's main
+asset --- verbatim submodule interfaces --- is worth little on a task
+with nothing to instantiate, so the algorithmic task pays planning's
+context and structure overhead without collecting its benefit. Routing
+exists to give each task only the machinery it benefits from.
+
+The brute-force deployment --- run both flows on every task --- is the
+most expensive one, and it wastes most of its budget. Every direct
+sample spent on a wrapper module converts to nothing, and every
+planning-flow sample spent on a small self-contained module pays an order of
+magnitude more tokens for a task the cheap flow solves equally well. A
+router that sends each task to its matching flow can, in principle,
+hold the attainable coverage at a fraction of the cost. The routing
+problem is to make that prediction \emph{before} the expensive flow has
+been paid for.
+
+\subsection{Task Classes and Oracle Labels}
+\label{sec:router-classes}
+
+Before formalizing classes, it is worth looking at the two solved sets
+concretely rather than only through aggregate rates. In the
+\textsc{Hybrid} run, nine tasks pass \emph{only} under the planning flow,
+and eleven pass under direct generation as well as under the planning flow
+(Table~\ref{tab:flow-sets}). The membership is telling. The
+planning-only set is wrappers, memories, and thin glue --- SRAM and
+memory wrappers, controller and register-file shims, and the IFU
+integrator --- tasks whose difficulty is wiring interfaces the direct
+prompt cannot see. The direct-solvable set is small self-contained
+modules --- the AES S-boxes and key expansion, the CRC engines, and
+clock, CSR, and interrupt utilities --- whose behavior fits in one
+coherent piece and offers nothing to reuse.
+
+\begin{table}[htbp]
+  \centering
+  \caption[Planning-only vs.\ direct-solvable sets]{The planning-only
+    and direct-solvable sets of the \textsc{Hybrid} run
+    ($60\times(10{+}10)$, ref-hack samples excluded per
+    Section~\ref{sec:results-artifacts}), with structural statistics of
+    their golden implementations (median / mean / range). ``Own cells''
+    = synthesized cells of the module's own logic after subtracting
+    submodule instances; regular-array wrappers count as 0, modules
+    Yosys cannot elaborate standalone are omitted. Yield counts passing
+    samples per solved task in the set's own flow.}
+  \label{tab:flow-sets}
+  \small
+  \setlength{\tabcolsep}{5pt}
+  \begin{tabular}{@{}l
+      >{\raggedright\arraybackslash}p{0.33\textwidth}
+      >{\raggedright\arraybackslash}p{0.38\textwidth}@{}}
+    \toprule
+     & Planning-only (9 tasks) & Direct-solvable (11 tasks) \\
+    \midrule
+    Members &
+      \texttt{e203\_srams}, \texttt{e203\_itcm\_ram},
+      \texttt{e203\_dtcm\_ram}, \texttt{e203\_dtcm\_ctrl},
+      \texttt{e203\_exu\_regfile}, \texttt{e203\_exu\_alu\_csrctrl},
+      \texttt{e203\_exu\_alu\_rglr}, \texttt{e203\_ifu},
+      \texttt{e203\_ifu\_minidec} &
+      \texttt{aes\_sbox}, \texttt{aes\_inv\_sbox},
+      \texttt{aes\_key\_expand\_128}, \texttt{aes\_rcon},
+      \texttt{sd\_crc\_7}, \texttt{sd\_crc\_16},
+      \texttt{sd\_fifo\_tx\_filler}, \texttt{e203\_clkgate},
+      \texttt{e203\_clk\_ctrl}, \texttt{e203\_extend\_csr},
+      \texttt{e203\_irq\_sync} \\
+    \midrule
+    Code lines        & 114 / 145 / 71--344        & 93 / 121 / 34--323 \\
+    Spec size (chars) & 5.4k / 8.9k / 3.6k--26k    & 3.5k / 3.9k / 1.6k--6.8k \\
+    Own cells         & 0 / 24 / 0--122            & 20 / 201 / 0--640 \\
+    Passing yield     & stable (mean 7.7/10)        & exploratory (mean 4.5/10) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The structural statistics in Table~\ref{tab:flow-sets} separate the
+two sets and make the eventual classifier concrete.
+Planning-only modules synthesize to \emph{zero own cells} at the median
+--- their logic \emph{is} their submodule wiring --- and carry the
+longer, port-table-dominated specifications. Direct-solvable modules
+are briefly specified, self-contained, and carry their modest logic
+entirely in-house (median 20 own cells, up to 640 for the S-boxes)
+with no dominant submodule structure. The two sets also differ in how
+they pass. Planning-solved tasks pass stably (7.7 of 10 samples on
+average, the interfaces being supplied rather than guessed), while
+direct-solved tasks pass by exploring the solution space (4.5 of 10).
+These are exactly the observable characteristics --- delegation vs.\
+own logic, interface-dominated vs.\ behavior-dominated specification
+--- that the router's feature extractor
+(Section~\ref{sec:router-design}) is built to read from the
+specification alone.
+
+We formalize the division as two task classes:
+
+\begin{description}
+  \item[Class A (structural).] Wrapper, integration, and memory-encapsulation
+    modules. The module's own logic is thin; its difficulty is wiring
+    externally defined submodule interfaces correctly. Class~A tasks want
+    the \textbf{planning flow}.
+  \item[Class B (algorithmic).] Self-contained datapath or control modules
+    --- cipher rounds, CRC, instruction decode, address generation. The
+    difficulty is the logic itself, not integration. Class~B tasks are
+    the candidates for \textbf{direct} generation --- not because the direct flow solves
+    more of them, but because it solves the solvable ones at a tenth of
+    the cost while the planning flow's overhead actively hurts.
+\end{description}
+
+For evaluation only, each task receives an oracle label computed from its
+\emph{golden} implementation. The reference RTL is synthesized with Yosys,
+submodule instances are subtracted, and the task is labeled~A if its own
+synthesized logic falls below a 250-cell threshold (or it is a recognized
+regular-array wrapper), otherwise~B. Oracle labels use golden RTL that
+no generation-time component may see; they exist so that routing
+decisions can be audited against structure. Class membership alone
+does not decide which flow converts a task --- most class-B tasks are
+solved by neither flow --- so Section~\ref{sec:results-routing} scores
+routing correctness against \emph{empirical flow-solvability}, whether
+each task solvable by exactly one flow was routed to that flow.
+
+\subsection{The Two-Tier Cascade}
+\label{sec:router-design}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\textwidth]{figures/router-arch.png}
+  \caption[Spec pre-route, v1 and v2]{The spec pre-route in its two
+    versions. Under the v1 rule the router agent reads the
+    specification and emits the key routing attributes ---
+    delegation, memory, and thin-control signals for class~A, FSM,
+    CDC, and algorithm signals for class~B --- and the decision
+    follows from these attributes alone, with an unconfident or
+    undecided read falling through to the Tier-1 plan probe. The
+    re-derived v2 rule gates deterministically instead. A small
+    parser accumulates the port count from the specification's port
+    tables and measures the specification length, and the rule logic
+    combines these caps with the extractor's delegation judgment and
+    own-state-bits estimate. Either way a task exits to the planning
+    flow or to direct generation and repair.}
+  \label{fig:router-flow}
+\end{figure}
+
+The router is a cascade of two increasingly expensive tests; a task
+exits at the first tier that is confident.
+Figure~\ref{fig:router-flow} shows the first tier in both of its
+versions, the v1 read that routes from the extracted key attributes
+alone and the re-derived v2 rule that adds deterministic gates parsed
+from the specification itself.
+
+\paragraph{Tier-0: spec pre-route.}
+A feature extractor reads the specification and emits seven structured
+judgments: whether the module delegates to submodules, is a memory
+encapsulation, or is thin pass-through control (all class-A signals);
+whether it contains a finite-state machine, clock-domain crossing, or a
+datapath algorithm (class-B signals); and an estimate of the state bits the
+module itself must hold, plus a confidence value. The production extractor
+is a small LLM call that returns this JSON verdict (a regex-based keyword
+extractor over the same features serves as the ablation baseline ---
+Section~\ref{sec:results-routing}). The extractor prompt is reproduced
+in Appendix~\ref{app:prompts}. The decision rule is deliberately
+transparent and conservative. The planning flow is the default. A task
+routes to \emph{direct} only when the extractor reports no submodule
+delegation, its substantive logic is a self-contained algorithmic
+core, and it passes conservative gates on port count, specification
+length, and estimated own-state bits --- the signature of the narrow
+computational leaves of Section~\ref{sec:router-classes}. The gates
+are deterministic. A small parser counts the specification's
+port-table rows and measures its stripped length; only the own-state
+estimate comes from the extractor. This gated, planning-default form
+is the v2 rule of Figure~\ref{fig:router-flow}. The earlier v1 rule
+decided from the extracted attributes alone, releasing any
+self-contained-core signal to direct, a polarity
+Section~\ref{sec:results-routing} traces to invalidated evidence and
+re-derives. When the extractor's confidence is below threshold, or
+its attributes leave the class undecided, the task falls through as
+\emph{uncertain}.
+
+\paragraph{Why an LLM extractor rather than parsing.}
+The features themselves are simple enough that keyword matching looks
+tempting, but specification language is \emph{semantically misleading}
+at exactly the decision boundary. A module can sound algorithmic while
+being structural. \texttt{e203\_ifu\_minidec} is described as
+performing ``preliminary decoding,'' yet it is a thin wrapper that
+instantiates the real decoder. A keyword extractor reads
+``decoding'', sees a self-contained core with no delegation
+vocabulary to contradict it, and releases the task to direct
+generation, where it has no access to the decoder interface it must
+wire. The reverse confusion also occurs.
+Specifications for genuinely algorithmic FIFOs and CRC engines spend
+most of their text on bus-facing port tables, so surface counting of
+interface vocabulary misreads them as structural. Deciding the class
+requires reading what the module \emph{does} across the whole document
+--- whether the described behavior is delegated or computed --- which is
+a semantic judgment, not a lexical one. The whole-spec LLM read resolves
+both directions, and the ablation of Section~\ref{sec:results-routing}
+quantifies the gap to the keyword baseline.
+
+\paragraph{What the specification cannot decide.}
+Not every specification commits its module to either class. Across
+the 60 tasks, the extractor returns all-false features at full
+confidence for exactly five:
+\texttt{sd\_bd} (a buffer-descriptor manager), \texttt{sd\_data\_serial\_host}
+(the SD data-line serial engine), \texttt{e203\_biu} (the bus interface
+unit), \texttt{e203\_exu\_alu\_lsuagu} (the load/store address-generation
+unit sharing the ALU datapath), and \texttt{e203\_exu\_wbck} (the
+write-back arbiter). All of them are \emph{interface-arbitration
+modules} that sit between protocols. They neither delegate to
+submodules (no class-A signal fires) nor implement a nameable algorithm
+or FSM (no class-B signal fires), but instead mediate, arbitrate, and
+translate between interfaces with modest own state. The specification
+genuinely does not commit the module to either class, and only the
+plan --- which makes the delegation structure explicit --- can. These
+are precisely the tasks the second tier exists for.
+
+\paragraph{Tier-1: plan probe.}
+Uncertain tasks run the planner once --- the cheapest informative
+component of the planning flow --- and the router probes the resulting structured plan's own
+natural-language requirement summary. The plan is a good routing feature
+for the same reason the condensation stage renders two views
+(Section~\ref{sec:pipeline-planner}). The \emph{planner view} is built
+to surface each module's delegation and reuse structure while the
+\emph{generation view} carries its full behavioral requirements. By
+the time a plan exists, characteristics that were ambiguous in the raw
+specification --- does this module instantiate the work or perform it?
+--- have been made explicit in the plan's own vocabulary of reuse
+decisions and requirement summaries. The probe simply reads that
+vocabulary back. Decisive delegation phrasing
+(``wraps'', ``encapsulates'', ``reuses existing'', or instantiation language
+without any own-implementation verb) keeps the task in the planning flow, plan
+in hand; clear self-contained-algorithm phrasing routes it to direct,
+\emph{discarding} the plan. The asymmetry of the default is intentional.
+The plan is already a sunk cost, so the probe bails to direct only when the
+module is clearly self-contained. A plan generated and then discarded is
+counted as a \emph{wasted plan} --- the cascade's overhead metric.
+
+\paragraph{The direct flow.}
+The direct arm is not a bare completion. It shares the generator's repair
+machinery. A directly generated candidate that fails the internal lint
+enters the same syntax repair loop, and (in arms where functional repair is
+enabled) the same functional repair loop, with the plan-dependent prompt
+sections simply absent. This matters for the routing economics. Direct
+generation costs roughly 10--12\,k tokens per sample against the planning flow's
+90--153\,k, so every correctly-routed class-B task buys nearly an order of
+magnitude of compute reduction. Section~\ref{sec:results-routing}
+measures the realized economics.
+
+\paragraph{Routing metrics.}
+Section~\ref{sec:results-routing} evaluates routing arms on four axes:
+\emph{coverage} (solved tasks and pass@k, against the planning flow's
+genuine coverage as the attainable ceiling); \emph{routing accuracy}
+(against empirical flow-solvability, where routing an integration task
+to direct forfeits a would-be pass and routing an algorithmic task to
+the planning flow only forfeits the cost saving); \emph{overhead} (wasted
+plans); and \emph{efficiency} (estimated tokens and summed compute per
+solved task). The design goal, stated once and measured throughout, is
+to hold the attainable coverage at the lowest compute, with misroutes
+near zero.
+
 \section{Summary}
 
-The pipeline's design comes down to three commitments. \emph{Ground every
+The methodology comes down to four commitments. \emph{Ground every
 decision.} The planner works over the per-task catalog through its
 reuse tools, and every reuse decision it emits is also resolved
 against that catalog, so plans cite only modules the environment
@@ -341,5 +687,8 @@ fatal contracts visible during repair rather than at scoring. The
 syntax-first-then-function gate ordering spends each feedback signal
 where it is most actionable. \emph{Reuse the model's own verified
 successes.} Repair hints come from diffs that already fixed a
-structurally identical failure. What each commitment buys is quantified
-in Chapter~\ref{ch:06}.
+structurally identical failure. \emph{Spend the expensive flow only
+where it converts.} The cascade router reads each specification and
+gives integration-shaped tasks the full planning flow, while narrow
+self-contained ones take the cheap direct flow at a tenth of the cost.
+What each commitment buys is quantified in Chapter~\ref{ch:05}.

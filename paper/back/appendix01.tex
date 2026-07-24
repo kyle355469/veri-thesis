@@ -4,8 +4,8 @@
 \label{app:prompts}
 
 This appendix reproduces the prompt text behind every LLM call in the
-system, so that the mechanisms described in Chapters~\ref{ch:03}
-and~\ref{ch:04} can be audited at the level at which they actually
+system, so that the mechanisms described in
+Chapter~\ref{ch:03} can be audited at the level at which they actually
 operate. Text is excerpted verbatim from the repository
 (\texttt{agentic\_ip\_reuse/.../prompts.py},
 \texttt{ip\_reuse\_legacy/prompts.py}, \texttt{rag\_rtl/routing.py}, and
@@ -365,7 +365,7 @@ When the repair loop runs on the direct flow (no plan), the
 reuse-intent line becomes ``Keep the public top-level behavior
 described in the specification.'', and the plan block and reuse rules
 are dropped; the rest of the skeleton is unchanged. This is how the
-router's direct arm shares the pipeline's repair machinery
+router's direct arm shares the planning flow's repair machinery
 (Section~\ref{sec:router-design}).
 
 \section{Functional Repair Prompt}
@@ -423,7 +423,7 @@ prompt, assembled by the direct runner. The provided-helper note names
 only genuine dependency modules; evaluation collateral --- the
 \texttt{ref\_*} golden model, testbench, and stimulus --- is excluded
 from that vocabulary, so the prompt never names the files behind the
-reference-wrapping loophole audited in
+reference-hack loophole audited in
 Section~\ref{sec:results-routing}.
 
 \begin{lstlisting}[language={},caption={Direct-flow generation

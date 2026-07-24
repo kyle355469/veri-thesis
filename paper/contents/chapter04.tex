@@ -1,387 +1,238 @@
 % !TeX root = ../main.tex
 
-\chapter{Cascade Routing between Direct and Pipeline Flows}
+\chapter{Experimental Setup}
 \label{ch:04}
 
-Comparing the pipeline of Chapter~\ref{ch:03} with direct generation
-task by task, we notice that the two flows have \emph{sharply different
-economics}. The pipeline's coverage subsumes the direct flow's, but at
-an order of magnitude more tokens per sample. Its planning
-machinery, decisive on integration problems, is measurably
-counterproductive on self-contained algorithm and FSM design, exactly
-where the cheap flow matches it. Pipeline-plan generation raises
-accuracy substantially on integration and routing problems, where the
-work is arranging and wiring existing modules; direct generation writes
-a self-contained datapath or state machine as one coherent piece and
-solves the same such tasks at a tenth of the cost. This division
-matches the purpose of this thesis exactly. IP-reuse problems mostly
-need several existing modules arranged and integrated correctly, which
-is precisely where the plan pays. The residual algorithmic tasks
-are served equally well --- and far more cheaply --- by letting the
-model generate directly. This chapter presents the second contribution
-of the thesis. A per-task \emph{cascade router} predicts, before
-spending pipeline-scale compute, which of the two flows a task should
-take --- the full agentic pipeline, or a cheap \emph{direct}
-single-shot generation.
-Section~\ref{sec:router-motivation} establishes why the two
-flows are complementary; Section~\ref{sec:router-classes} analyzes the
-two solved sets and defines the task classes and the oracle labels used
-to evaluate routing; Section~\ref{sec:router-design} describes the
-two-tier cascade; and Section~\ref{sec:router-metrics} defines the
-routing-specific metrics used in Section~\ref{sec:results-routing}.
-One caution applies to the whole chapter. The benchmark-gaming audit
-(Section~\ref{sec:results-artifacts}) later shows that the solution
-set this rule's polarity was fitted on was contaminated, so
-Section~\ref{sec:results-routing} evaluates both the rule as designed
-here and a version re-derived from the cleaned evidence.
+This chapter fixes the experimental ground rules shared by every result in
+Chapter~\ref{ch:05}: the benchmark and its scoring semantics
+(Section~\ref{sec:setup-realbench}), the models and serving infrastructure
+(Section~\ref{sec:setup-models}), the metrics and the cost-accounting rules we
+commit to (Section~\ref{sec:setup-metrics}), and a complete inventory of the
+experimental runs together with their configurations
+(Section~\ref{sec:setup-runs}). The inventory table doubles as the
+reproducibility anchor of this thesis. Every number reported later traces back
+to exactly one row of Table~\ref{tab:run-inventory}.
 
-\section{Motivation: Two Complementary Flows}
-\label{sec:router-motivation}
+\section{The RealBench Benchmark}
+\label{sec:setup-realbench}
 
-Running \emph{both} flows on all 60 tasks (the \textsc{Hybrid} arm of
-Table~\ref{tab:run-inventory}) motivates routing, though not in the way
-we first read it. With ten samples per flow, the pipeline solves 20
-tasks; the direct flow solves 11 --- every one of them also solved by
-the pipeline.\footnote{The raw \textsc{Hybrid} records show the direct
-flow ``solving'' ten further tasks, but the benchmark-gaming audit of
-Section~\ref{sec:results-artifacts} traced all ten to samples that
-merely instantiate the benchmark's own reference model through a
-prompt-side leak; they are excluded here and throughout.} Coverage,
-then, does not argue for keeping a direct flow at all --- cost does.
-Wrapper and integration modules pass only under the pipeline, which
-supplies the exact interfaces of the submodules they must instantiate
-and wire. Self-contained algorithmic modules pass under direct
-generation too, in one coherent piece, at roughly a tenth of a pipeline
-sample's token cost. On exactly those tasks the pipeline's
-planning machinery is measurably counterproductive, as the next
-paragraph details. One flow dominates on \emph{ability}; it is far from
-dominant on \emph{cost per solved task}.
-
-\paragraph{Why planning is overhead on algorithm/FSM tasks.}
-That the pipeline converts poorly on algorithmic and FSM tasks is
-measurable in the \textsc{Hybrid} run's own pipeline flow. On tasks
-whose specification centers on a state machine, compiling samples
-convert to passes at 16.2\,\%, against 43.1\,\% elsewhere. This is not
-an implementation accident; it follows from what planning does. First,
-decomposition fragments coherence. A state machine or an arithmetic
-datapath is one tightly coupled artifact. A plan that splits it into
-submodule pieces forces the generator to implement fragments and glue
-where a single \texttt{always}-block idiom --- exactly the pattern the
-model knows best from pretraining --- would have expressed the whole
-behavior (compiling samples that follow the plan's multi-module
-decomposition pass at 12.5\,\%, against 35.3\,\% for single-module
-outputs). Second, the plan is a paraphrase. It restates the
-specification's behavior in summarized form, and for algorithmic logic
-the value lives in exact details (encodings, priorities, edge conditions)
-that summarization inevitably coarsens. The generator then optimizes
-toward the paraphrase rather than the source. Third, the plan's main
-asset --- verbatim submodule interfaces --- is worth little on a task
-with nothing to instantiate, so the algorithmic task pays planning's
-context and structure overhead without collecting its benefit. Routing
-exists to give each task only the machinery it benefits from.
-
-The brute-force deployment --- run both flows on every task --- is the
-most expensive one, and it wastes most of its budget. Every direct
-sample spent on a wrapper module converts to nothing, and every
-pipeline sample spent on a small self-contained module pays an order of
-magnitude more tokens for a task the cheap flow solves equally well. A
-router that sends each task to its matching flow can, in principle,
-hold the attainable coverage at a fraction of the cost. The routing
-problem is to make that prediction \emph{before} the expensive flow has
-been paid for.
-
-\section{Task Classes and Oracle Labels}
-\label{sec:router-classes}
-
-Before formalizing classes, it is worth looking at the two solved sets
-concretely rather than only through aggregate rates. In the
-\textsc{Hybrid} run, nine tasks pass \emph{only} under the pipeline,
-and eleven pass under direct generation as well as under the pipeline
-(Table~\ref{tab:flow-sets}). The membership is telling. The
-pipeline-only set is wrappers, memories, and thin glue --- SRAM and
-ITCM/DTCM wrappers (\texttt{e203\_srams}, \texttt{e203\_itcm\_ram},
-\texttt{e203\_dtcm\_ram}), a memory controller
-(\texttt{e203\_dtcm\_ctrl}), the register file and CSR-control shims
-(\texttt{e203\_exu\_regfile}, \texttt{e203\_exu\_alu\_csrctrl},
-\texttt{e203\_exu\_alu\_rglr}), the IFU integrator (\texttt{e203\_ifu}),
-and a mini-decoder that instantiates the real decode logic
-(\texttt{e203\_ifu\_minidec}). These are tasks whose difficulty is wiring
-interfaces the direct prompt cannot see. The direct-solvable set is
-small self-contained modules --- the AES S-boxes, key expansion, and
-round-constant table (\texttt{aes\_sbox}, \texttt{aes\_inv\_sbox},
-\texttt{aes\_key\_expand\_128}, \texttt{aes\_rcon}), the CRC engines
-(\texttt{sd\_crc\_7}, \texttt{sd\_crc\_16}), a FIFO filler
-(\texttt{sd\_fifo\_tx\_filler}), and clock/CSR/interrupt utilities
-(\texttt{e203\_clkgate}, \texttt{e203\_clk\_ctrl},
-\texttt{e203\_extend\_csr}, \texttt{e203\_irq\_sync}). These are modules whose
-behavior fits in one coherent piece and offers nothing to reuse.
+All end-to-end evaluations use RealBench~\citep{realbench2025}, a Verilog
+generation benchmark built from three real, open-source IP projects rather
+than from isolated textbook exercises. Each task provides a natural-language
+specification of one target module, the source files of the modules it may
+depend on, a golden reference implementation, and a self-checking testbench.
+The generator must produce the target module; the surrounding project files
+are supplied by the evaluation environment.
 
 \begin{table}[htbp]
   \centering
-  \caption[Pipeline-only vs.\ direct-solvable sets]{The pipeline-only
-    and direct-solvable sets of the \textsc{Hybrid} run
-    ($60\times(10{+}10)$, ref-wrap samples excluded per
-    Section~\ref{sec:results-artifacts}), with structural statistics of
-    their golden implementations (median / mean / range). ``Own cells''
-    = synthesized cells of the module's own logic after subtracting
-    submodule instances; regular-array wrappers count as 0, modules
-    Yosys cannot elaborate standalone are omitted. Yield counts passing
-    samples per solved task in the set's own flow.}
-  \label{tab:flow-sets}
+  \caption[RealBench module-level task families]{The 60 module-level
+    RealBench tasks used in this thesis, by source project.}
+  \label{tab:families}
   \small
-  \setlength{\tabcolsep}{5pt}
-  \begin{tabular}{@{}l
-      >{\raggedright\arraybackslash}p{0.33\textwidth}
-      >{\raggedright\arraybackslash}p{0.38\textwidth}@{}}
+  \begin{tabular}{llrl}
     \toprule
-     & Pipeline-only (9 tasks) & Direct-solvable (11 tasks) \\
+    Family & Source project & Tasks & Character \\
     \midrule
-    Members &
-      \texttt{e203\_srams}, \texttt{e203\_itcm\_ram},
-      \texttt{e203\_dtcm\_ram}, \texttt{e203\_dtcm\_ctrl},
-      \texttt{e203\_exu\_regfile}, \texttt{e203\_exu\_alu\_csrctrl},
-      \texttt{e203\_exu\_alu\_rglr}, \texttt{e203\_ifu},
-      \texttt{e203\_ifu\_minidec} &
-      \texttt{aes\_sbox}, \texttt{aes\_inv\_sbox},
-      \texttt{aes\_key\_expand\_128}, \texttt{aes\_rcon},
-      \texttt{sd\_crc\_7}, \texttt{sd\_crc\_16},
-      \texttt{sd\_fifo\_tx\_filler}, \texttt{e203\_clkgate},
-      \texttt{e203\_clk\_ctrl}, \texttt{e203\_extend\_csr},
-      \texttt{e203\_irq\_sync} \\
-    \midrule
-    Code lines        & 114 / 145 / 71--344        & 93 / 121 / 34--323 \\
-    Spec size (chars) & 5.4k / 8.9k / 3.6k--26k    & 3.5k / 3.9k / 1.6k--6.8k \\
-    Own cells         & 0 / 24 / 0--122            & 20 / 201 / 0--640 \\
-    Passing yield     & stable (mean 7.7/10)        & exploratory (mean 4.5/10) \\
+    AES  & OpenCores AES-128 cipher core & 6  & self-contained datapath logic \\
+    SDC  & OpenCores SD-card controller  & 14 & bus-facing control logic \\
+    E203 & HummingBirdv2 E203 RISC-V core & 40 & deep hierarchy, reuse-rich \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-The structural statistics in Table~\ref{tab:flow-sets} still separate
-the two sets and make the eventual classifier concrete, though less
-dramatically than the raw (pre-audit) records once suggested.
-Pipeline-only modules synthesize to \emph{zero own cells} at the median
---- their logic \emph{is} their submodule wiring --- and carry the
-longer, port-table-dominated specifications. Direct-solvable modules
-are briefly specified, self-contained, and carry their modest logic
-entirely in-house (median 20 own cells, up to 640 for the S-boxes)
-with no dominant submodule structure. The two sets also differ in how
-they pass. Pipeline-solved tasks pass stably (7.7 of 10 samples on
-average, the interfaces being supplied rather than guessed), while
-direct-solved tasks pass by exploring the solution space (4.5 of 10).
-These are exactly the observable characteristics --- delegation vs.\
-own logic, interface-dominated vs.\ behavior-dominated specification
---- that the router's feature extractor
-(Section~\ref{sec:router-design}) is built to read from the
-specification alone.
+The benchmark distinguishes \emph{module-level} tasks, which target one module
+inside an otherwise-provided project, from \emph{system-level} tasks, which
+ask for an entire subsystem. This thesis reports on the \textbf{60
+module-level tasks} summarized in Table~\ref{tab:families}; system-level
+tasks are excluded from all headline numbers for two reasons. Their specifications
+(up to $\sim$704\,k characters for \texttt{e203\_cpu\_top}) exceed what any of
+our serving configurations can process without aggressive condensation, and
+a 60-task universe with three distinct families is already large
+enough to expose the phenomena this thesis studies. The three families span
+a useful difficulty gradient: AES modules are small and algorithmically
+self-contained, SDC modules implement Wishbone-facing control logic with
+wide interfaces, and the E203 family covers a complete RISC-V processor
+core whose modules instantiate one another --- the setting in which IP reuse
+has the most to offer.
 
-We formalize the division as two task classes:
+\paragraph{Scoring.}
+RealBench scores with its own per-task \texttt{Makefile}, and its verdict is
+deliberately strict. A sample is counted as a \emph{syntax} pass only if
+Verilator~\citep{verilator} compiles the full project --- generated module,
+provided dependencies, reference model, and testbench together --- with
+\textbf{no \texttt{\%Error} and no \texttt{\%Warning}} outside the Makefile's
+explicit waiver list; warnings are fatal. A sample is a \emph{functional}
+pass (``pass'' for short) only if it also compiles and the testbench
+simulation reports zero output mismatches against the golden reference.
+Two consequences of this design recur throughout the thesis. First, our
+syntax numbers are conservative relative to benchmarks that fail only on
+errors (Section~\ref{sec:threats}). Second, the environment imposes two
+non-negotiable structural contracts on generated code. A dependency that the
+environment ships as a file must be \emph{instantiated, never re-declared}
+(re-declaration is a fatal \texttt{MODDUP}), and the testbench's DUT
+instantiation fixes the exact port list (a missing port is a fatal
+\texttt{PINNOTFOUND}). Section~\ref{sec:pipeline-generator} describes how the
+pipeline internalizes both contracts.
 
-\begin{description}
-  \item[Class A (structural).] Wrapper, integration, and memory-encapsulation
-    modules. The module's own logic is thin; its difficulty is wiring
-    externally defined submodule interfaces correctly. Class~A tasks want
-    the \textbf{pipeline}.
-  \item[Class B (algorithmic).] Self-contained datapath or control modules
-    --- cipher rounds, CRC, instruction decode, address generation. The
-    difficulty is the logic itself, not integration. Class~B tasks want
-    \textbf{direct} generation --- not because the direct flow solves
-    more of them, but because it solves the solvable ones at a tenth of
-    the cost while the pipeline's planning overhead actively hurts.
-\end{description}
+\section{Models and Serving Infrastructure}
+\label{sec:setup-models}
 
-For evaluation only, each task receives an oracle label computed from its
-\emph{golden} implementation. The reference RTL is synthesized with Yosys,
-submodule instances are subtracted, and the task is labeled~A if its own
-synthesized logic falls below a 250-cell threshold (or it is a recognized
-regular-array wrapper), otherwise~B. The label also fixes the task's
-\emph{target flow} (A$\to$pipeline, B$\to$direct). Oracle labels use golden
-RTL that no generation-time component may see; they exist so that routing
-accuracy can be scored. The audit of
-Section~\ref{sec:results-artifacts} later invalidates the target-flow
-mapping the labels carry (post-cleaning, only 4 of the 28 class-B
-tasks are solved by the direct flow alone), so
-Section~\ref{sec:results-routing} scores routing correctness against
-empirical flow-solvability instead and flags the label table for
-recomputation.
+All generation uses open-weight models served locally through
+vLLM~\citep{kwon2023vllm} behind an OpenAI-compatible endpoint, on
+university/NCHC GPU nodes reached through SSH port forwarding. Three models
+appear in this thesis:
 
-\section{The Two-Tier Cascade}
-\label{sec:router-design}
+\begin{itemize}
+  \item \textbf{gpt-oss-20B}~\citep{openai2025gptoss} --- the workhorse model.
+    All ablations (grounding, repair cache, repair budgets, routing) run on
+    this model, so their comparisons are model-controlled.
+  \item \textbf{gpt-oss-120B}~\citep{openai2025gptoss} --- used to test which
+    findings survive a $6\times$ scale increase
+    (Sections~\ref{sec:results-failure} and~\ref{sec:results-routing}).
+  \item \textbf{Qwen3-235B}~\citep{yang2025qwen3} --- used in supplementary
+    repair-budget runs; it does not participate in headline comparisons.
+\end{itemize}
 
-\begin{figure}[htbp]
+One serving behavior shaped the implementation and is documented here
+because it is invisible in the results yet load-bearing for
+reproduction. The server caps completion length rather than rejecting a
+request when prompt and requested tokens together exceed the
+131{,}072-token context window, but returns HTTP~400 when the prompt
+alone exceeds it. This is the condition behind the ``not generated'' bucket
+of Section~\ref{sec:results-failure} and one motivation for the
+specification condensation of Section~\ref{sec:pipeline-planner}.
+
+\section{Metrics and Cost Accounting}
+\label{sec:setup-metrics}
+
+\paragraph{Quality.}
+For a run with $n$ samples per task, we report the \emph{syntax rate} and
+\emph{pass rate} as per-sample means over all generated records, and
+\emph{pass@k} per task with the standard unbiased
+estimator~\citep{chen2021humaneval}
+\[
+  \text{pass@}k \;=\; \mathbb{E}_{\text{tasks}}
+  \left[ 1 - \binom{n-c}{k} \Big/ \binom{n}{k} \right],
+\]
+where $c$ is the number of passing samples for the task, averaged over the 60
+tasks. We also report \emph{solved tasks}, the number of tasks with
+at least one passing sample. This equals $60 \cdot \text{pass@}n$ and is the
+quantity a practitioner who can afford $n$ attempts actually cares about.
+
+\paragraph{Cost.}
+We use two cost measures. \emph{Estimated tokens} are computed from
+prompt/response character counts with a calibrated 4.38-characters-per-token
+heuristic and summed per run; \emph{compute time} ($\Sigma$wall) is the sum
+of per-sample wall-clock seconds, which measures total machine work
+independently of the harness's $\sim$80-way request concurrency. Three
+accounting conventions apply throughout: (i)~token totals from runs that
+were resumed after interruption are not cited as costs; (ii)~token
+totals for the direct flow are reported as lower bounds; and
+(iii)~wall-clock is compared only within a run --- within-run sums and
+per-solved-task ratios --- never across runs executed on different days
+on the shared server.
+
+\section{Run Inventory}
+\label{sec:setup-runs}
+
+Table~\ref{tab:run-inventory} lists every experimental run this thesis
+reports, the configuration that distinguishes it, and the section that
+consumes it. Short labels (left column) are used throughout
+Chapter~\ref{ch:05}. All runs share the same task discovery, per-task
+catalog construction, and RealBench evaluation harness, so rows differ only
+in the flow and the flagged configuration. Unless stated otherwise, sampled
+runs use temperature~0.2 (the runner default) and the two-stage planning flow of
+Chapter~\ref{ch:03}; ``$6/4$'' style entries abbreviate the syntax/functional
+repair-attempt budgets of Section~\ref{sec:pipeline-repair}.
+
+\begin{table}[htbp]
   \centering
-  \includegraphics[width=\textwidth]{figures/router-light.png}
-  \caption[Cascade router decision flow]{The two-tier cascade router.
-    Tier-0 extracts the key routing attributes from the specification
-    alone. Algorithmic signals (FSM, algorithm, core logic) route to the
-    direct flow; structural signals (wrapper, thin pass-through,
-    delegation) route to the pipeline flow. Only ambiguous tasks
-    generate a plan first (Tier-1); the router then re-routes by parsing
-    the plan's own vocabulary, and a task routed to direct after
-    planning discards the plan (a ``wasted plan'').}
-  \label{fig:router-flow}
-\end{figure}
+  \caption[Inventory of experimental runs]{Inventory of all reported runs.
+    Every number in Chapter~\ref{ch:05} traces to one row. Directory names
+    are given in Table~\ref{tab:run-dirs}.}
+  \label{tab:run-inventory}
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{llllp{0.34\textwidth}}
+    \toprule
+    Label & Model & $60\times n$ & Temp. & Distinguishing configuration \\
+    \midrule
+    \multicolumn{5}{l}{\emph{Baselines and headline pipeline}} \\
+    \textsc{Direct-t0}   & 20B  & $\times 1$  & 0   & spec $\to$ model, no plan, no repair \\
+    \textsc{Pipe-t0}     & 20B  & $\times 1$  & 0   & grounded planner + generator, cache off \\
+    \midrule
+    \multicolumn{5}{l}{\emph{Repair-cache trio (identical except cache scope)}} \\
+    \textsc{Cache-off}   & 20B  & $\times 20$ & 0.2 & repair cache off \\
+    \textsc{Cache-task}  & 20B  & $\times 20$ & 0.2 & repair cache, task scope \\
+    \textsc{Cache-run}   & 20B  & $\times 20$ & 0.2 & repair cache, run scope \\
+    \midrule
+    \multicolumn{5}{l}{\emph{Model scale}} \\
+    \textsc{Pipe-120b}   & 120B & $\times 10$ & 0.2 & as \textsc{Cache-run}, $6\times$ larger model \\
+    \midrule
+    \multicolumn{5}{l}{\emph{Functional repair and budgets}} \\
+    \textsc{Func-2/4}    & 20B  & $\times 10$ & 0.2 & functional repair + spec slice, budgets $2/4$ \\
+    \textsc{Func-10/10}  & 20B  & $\times 10$ & 0.2 & as above, budgets raised to $10/10$ \\
+    \textsc{Func-10/10-120b} & 120B & $\times 10$ & 0.2 & as \textsc{Func-10/10}, $6\times$ larger model \\
+    \midrule
+    \multicolumn{5}{l}{\emph{Routing (Section~\ref{sec:pipeline-routing} arms)}} \\
+    \textsc{Hybrid}      & 20B  & $\times(10{+}10)$ & 0.2 & no router: both flows on every task \\
+    \textsc{Router-v1}   & 20B  & $\times 10$ & 0.2 & full cascade (Tier-0 LLM + probe), $6/4$ \\
+    \textsc{Router-v1-120b} & 120B & $\times 10$ & 0.2 & as \textsc{Router-v1} \\
+    \textsc{Router-v2}   & 20B  & $\times 10$ & 0.2 & rule re-derived post-audit (planning-default, no probe), $6/4$, leak-filtered direct prompt \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
-The router is a cascade of two increasingly expensive tests
-(Figure~\ref{fig:router-flow}); a task exits at the first tier that is
-confident.
-
-\paragraph{Tier-0: spec pre-route.}
-A feature extractor reads the specification and emits seven structured
-judgments: whether the module delegates to submodules, is a memory
-encapsulation, or is thin pass-through control (all class-A signals);
-whether it contains a finite-state machine, clock-domain crossing, or a
-datapath algorithm (class-B signals); and an estimate of the state bits the
-module itself must hold, plus a confidence value. The production extractor
-is a small LLM call that returns this JSON verdict (a regex-based keyword
-extractor over the same features serves as the ablation baseline ---
-Section~\ref{sec:results-routing}). The extractor prompt is reproduced
-in Appendix~\ref{app:prompts}. The decision rule is deliberately
-transparent. Any algorithmic signal routes to \emph{direct}, else any
-structural signal routes to \emph{pipeline}, else --- or when the
-extractor's confidence is below threshold --- the task falls through as
-\emph{uncertain}.
-
-\paragraph{Why an LLM extractor rather than parsing.}
-The features themselves are simple enough that keyword matching looks
-tempting, but specification language is \emph{semantically misleading}
-at exactly the decision boundary. A module can sound algorithmic while
-being structural. \texttt{e203\_ifu\_minidec} is described as
-performing ``preliminary decoding,'' yet it is a thin wrapper that
-instantiates the real decoder. A keyword extractor reads
-``decoding'' and routes it to direct, where it has no access to the
-decoder interface it must wire. The reverse confusion also occurs.
-Specifications for genuinely algorithmic FIFOs and CRC engines spend
-most of their text on bus-facing port tables, so surface counting of
-interface vocabulary misreads them as structural. Deciding the class
-requires reading what the module \emph{does} across the whole document
---- whether the described behavior is delegated or computed --- which is
-a semantic judgment, not a lexical one. The whole-spec LLM read resolves
-both directions, and the ablation of Section~\ref{sec:results-routing}
-quantifies the gap to the keyword baseline.
-
-\paragraph{What falls through as uncertain.}
-The uncertain remainder is not noise; it is a coherent third type of
-question. In the full-cascade run, exactly five tasks fell through:
-\texttt{sd\_bd} (a buffer-descriptor manager), \texttt{sd\_data\_serial\_host}
-(the SD data-line serial engine), \texttt{e203\_biu} (the bus interface
-unit), \texttt{e203\_exu\_alu\_lsuagu} (the load/store address-generation
-unit sharing the ALU datapath), and \texttt{e203\_exu\_wbck} (the
-write-back arbiter). All of them are \emph{interface-arbitration
-modules} that sit between protocols. They neither delegate to
-submodules (no class-A signal fires) nor implement a nameable algorithm
-or FSM (no class-B signal fires), but instead mediate, arbitrate, and
-translate between interfaces with modest own state. For every one of
-the five, the extractor returned all-false features at full confidence.
-The specification genuinely does not commit the module to either class,
-and only the plan --- which makes the delegation structure explicit ---
-can. These are precisely the tasks the second tier exists for.
-
-\paragraph{Tier-1: plan probe.}
-Uncertain tasks run the planner once --- the cheapest informative pipeline
-component --- and the router probes the resulting structured plan's own
-natural-language requirement summary. The plan is a good routing feature
-for the same reason the condensation stage renders two views
-(Section~\ref{sec:pipeline-planner}). The \emph{planner view} is built
-to surface each module's delegation and reuse structure while the
-\emph{generation view} carries its full behavioral requirements. By
-the time a plan exists, characteristics that were ambiguous in the raw
-specification --- does this module instantiate the work or perform it?
---- have been made explicit in the plan's own vocabulary of reuse
-decisions and requirement summaries. The probe simply reads that
-vocabulary back. Decisive delegation phrasing
-(``wraps'', ``encapsulates'', ``reuses existing'', or instantiation language
-without any own-implementation verb) keeps the task in the pipeline, plan
-in hand; clear self-contained-algorithm phrasing routes it to direct,
-\emph{discarding} the plan. The asymmetry of the default is intentional.
-The plan is already a sunk cost, so the probe bails to direct only when the
-module is clearly self-contained. A plan generated and then discarded is
-counted as a \emph{wasted plan} --- the cascade's overhead metric.
-
-\paragraph{The direct flow.}
-The direct arm is not a bare completion. It shares the generator's repair
-machinery. A directly generated candidate that fails the internal lint
-enters the same syntax repair loop, and (in arms where functional repair is
-enabled) the same functional repair loop, with the plan-dependent prompt
-sections simply absent. This matters for the routing economics. Direct
-generation costs roughly 10--12\,k tokens per sample against the pipeline's
-90--153\,k, so every correctly-routed class-B task buys nearly an order of
-magnitude of compute reduction, provided the class assignment is real.
-Section~\ref{sec:results-routing} tests that premise against the cleaned
-evidence.
-
-Figure~\ref{fig:router-samples} traces how the full-cascade run's
-$60\times10 = 600$ samples actually move through these stages, together
-with the volume the repair loops handle in each flow. Tier-0 routes 55
-of 60 tasks from the specification alone (32 tasks to direct, 23 to the
-pipeline); the remaining 5 tasks' samples pay one planner call each,
-after which the probe keeps 28 samples in the pipeline and releases 22
-to direct. Of the resulting 342 direct and 258 pipeline samples, the
-syntax repair loop delivers 205 and 176 genuinely compiling candidates
-respectively (a further 55 direct-flow ``compiles'' were ref-wraps and
-are invalidated; Section~\ref{sec:results-artifacts}). The direct
-flow compiles at 59.9\,\% with most samples clean on arrival, while the
-pipeline flow leans on the loop harder, as expected for the giant integrators
-routed to it. The functional stage converts 130 samples into
-passes across both flows.
-
-\begin{figure}[htbp]
+\begin{table}[htbp]
   \centering
-  \resizebox{\textwidth}{!}{%
-  \begin{tikzpicture}[
-      font=\small,
-      box/.style={draw, rounded corners=2pt, align=center, inner sep=4pt,
-                  minimum height=9mm},
-      stage/.style={draw, rounded corners=2pt, align=center, inner sep=4pt,
-                    minimum height=9mm, very thick},
-      arr/.style={-{Stealth[length=2.5mm]}},
-    ]
-    \node[stage] (t0) {Tier-0\\spec pre-route};
-    \node[box, left=8mm of t0] (all) {60 tasks\\$\times$10 = 600};
-    \node[box, above right=6mm and 22mm of t0] (dir) {\textbf{direct flow}: 342\\(320 pre-routed\\+ 22 probe-routed)};
-    \node[box, below right=6mm and 22mm of t0] (pipe) {\textbf{pipeline flow}: 258\\(230 pre-routed\\+ 28 probe-routed)};
-    \node[stage, below=17mm of t0] (t1) {Tier-1 plan probe\\5 tasks (50 samples)};
-    \node[box, right=9mm of dir] (dsyn) {syntax loop ($\leq$6)\\205 compile / 82 exh.\\/ 55 wraps excl.};
-    \node[box, right=9mm of pipe] (psyn) {syntax loop ($\leq$6)\\176 compile / 82 exh.};
-    \node[box, right=9mm of dsyn] (dfun) {functional ($\leq$4)\\49 pass};
-    \node[box, right=9mm of psyn] (pfun) {functional ($\leq$4)\\81 pass};
-    \node[box, right=9mm of dfun, yshift=-13.5mm] (out) {130 passing\\21/60 solved};
-    \draw[arr] (all) -- (t0);
-    \draw[arr] (t0.north) |- node[left, font=\footnotesize, pos=0.12]{32 tasks} (dir.west);
-    \draw[arr] (t0.south) |- node[left, font=\footnotesize, pos=0.12]{23 tasks} (pipe.west);
-    \draw[arr] (t0) -- node[right, font=\footnotesize]{uncertain} (t1);
-    \draw[arr] (t1.east) -- ++(6mm,0) |- node[right, font=\footnotesize, pos=0.3]{discard plan} ([yshift=-3mm]dir.west);
-    \draw[arr] (t1.east) -- ++(6mm,0) |- node[right, font=\footnotesize, pos=0.35]{keep plan} ([yshift=-3mm]pipe.west);
-    \draw[arr] (dir) -- (dsyn);
-    \draw[arr] (pipe) -- (psyn);
-    \draw[arr] (dsyn) -- (dfun);
-    \draw[arr] (psyn) -- (pfun);
-    \draw[arr] (dfun.east) -| ([xshift=4mm]dfun.east) |- ([yshift=2.5mm]out.west);
-    \draw[arr] (pfun.east) -| ([xshift=4mm]pfun.east) |- ([yshift=-2.5mm]out.west);
-  \end{tikzpicture}}
-  \caption[Sample flow through the cascade]{How the full-cascade run's
-    600 samples route through the tiers and the shared repair loops
-    (gpt-oss-20B, budgets $6/4$; ref-wrap samples excluded per
-    Section~\ref{sec:results-artifacts}). Tier-0 decides 55 of 60 tasks
-    from the specification; the plan probe resolves the 5 uncertain
-    tasks per-sample. Both flows run the same syntax and functional
-    repair loops; counts give each stage's outcomes.}
-  \label{fig:router-samples}
-\end{figure}
+  \caption[Run labels to repository directories]{Mapping from run labels to
+    repository directories under \texttt{runs/}.}
+  \label{tab:run-dirs}
+  \footnotesize
+  \begin{tabular}{ll}
+    \toprule
+    Label & Directory \\
+    \midrule
+    \textsc{Direct-t0}   & \texttt{realbench\_direct\_model} \\
+    \textsc{Pipe-t0}     & \texttt{agentic\_plan\_legacy\_realbench\_plan\_hallu\_fix\_t0} \\
+    \textsc{Cache-off}   & \texttt{agentic\_plan\_legacy\_realbench\_oss20b\_plan\_hallu\_no\_rep\_cache} \\
+    \textsc{Cache-task}  & \texttt{agentic\_plan\_legacy\_realbench\_oss20b\_plan\_hallu\_task\_rep\_cache} \\
+    \textsc{Cache-run}   & \texttt{agentic\_plan\_legacy\_realbench\_oss20b\_plan\_hallu} \\
+    \textsc{Pipe-120b}   & \texttt{agentic\_plan\_legacy\_realbench\_oss120b\_plan\_hallu\_tool\_call} \\
+    \textsc{Func-2/4}    & \texttt{repair\_spec\_slice\_oss20b\_func\_v2} \\
+    \textsc{Func-10/10}  & \texttt{repair\_spec\_slice\_oss20b\_func\_v2\_time-err-off\_10syn\_10func} \\
+    \textsc{Func-10/10-120b} & \texttt{repair\_spec\_slice\_oss120b\_func\_v2\_time-err-off\_10syn\_10func} \\
+    \textsc{Hybrid}      & \texttt{hybrid\_oss20b\_10syn\_10func\_rep\_spec} \\
+    \textsc{Router-v1}   & \texttt{Full-2T\_router\_oss20B\_sync6\_func4} \\
+    \textsc{Router-v1-120b} & \texttt{Full-2T\_router\_oss120B\_sync6\_func4} \\
+    \textsc{Router-v2}   & \texttt{Full-2T\_router\_oss20B\_syn6\_func4\_s10\_t02\_v2} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
-\section{Routing Metrics}
-\label{sec:router-metrics}
+Two rows deserve advance warning because they differ from their comparison
+partners in more than one variable. \textsc{Func-10/10} changed both the
+repair budgets ($2/4 \to 10/10$) and a scoring waiver
+(\texttt{TIMESCALEMOD} warnings suppressed) relative to \textsc{Func-2/4};
+Section~\ref{sec:results-budget} disentangles the two. And \textsc{Hybrid}
+predates the direct-flow repair loop that the router runs include, besides
+using the larger $10/10$ budgets. Section~\ref{sec:results-routing}
+therefore treats \textsc{Router-v1} $\to$ \textsc{Router-v2} as the only
+single-variable routing comparison and labels the comparison against
+\textsc{Hybrid} as directional. A third caution spans the whole
+inventory. The benchmark repaired its two S-box testbenches on
+June~25, 2026, so arms scored before the repair (\textsc{Direct-t0},
+\textsc{Pipe-t0}, the \textsc{Cache} trio, \textsc{Pipe-120b},
+\textsc{Func-2/4}) and after it (\textsc{Func-10/10},
+\textsc{Func-10/10-120b}, \textsc{Hybrid},
+the router arms) are not comparable on \texttt{aes\_sbox} and
+\texttt{aes\_inv\_sbox}. The cross-boundary comparisons in
+Chapter~\ref{ch:05} exclude these two tasks
+(Section~\ref{sec:results-artifacts}).
 
-Section~\ref{sec:results-routing} evaluates routing arms on four axes:
-\emph{coverage} (solved tasks and pass@k, against the pipeline's
-genuine coverage as the attainable ceiling); \emph{routing accuracy}
-(the confusion between oracle class and chosen flow, where an
-A$\to$direct misroute forfeits a would-be pass and a B$\to$pipeline
-misroute forfeits the cost saving); \emph{overhead} (wasted plans); and
-\emph{efficiency} (estimated tokens and summed compute per solved
-task). After the audit invalidates the labels' target-flow mapping,
-Section~\ref{sec:results-routing} replaces the label-based confusion
-matrix with correctness against \emph{empirical flow-solvability} ---
-whether each task solvable by exactly one flow was routed to that
-flow. The design goal, stated once and measured throughout, is to hold the
-attainable coverage at the lowest compute, with misroutes near zero.
+One scoring rule applies to every run with a direct flow. Samples whose
+generated RTL merely instantiates a leaked \texttt{ref\_*} reference
+model are invalidated --- counted as syntax and functional failures ---
+before any rate is computed. Section~\ref{sec:results-artifacts}
+documents the leak, the detector, and the per-run impact.

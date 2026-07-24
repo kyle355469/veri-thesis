@@ -9,7 +9,7 @@ ARMS = [
     ("Pipe-t0", "agentic_plan_legacy_realbench_plan_hallu_fix_t0"),
     ("Cache-off", "agentic_plan_legacy_realbench_oss20b_plan_hallu_no_rep_cache"),
     ("Pipe-120b", "agentic_plan_legacy_realbench_oss120b_plan_hallu_tool_call"),
-    ("Router-2t", "Full-2T_router_oss20B_sync6_func4"),
+    ("Router-v1", "Full-2T_router_oss20B_sync6_func4"),
 ]
 
 cols = {}

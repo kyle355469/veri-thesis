@@ -62,9 +62,9 @@ dependencies and survive a strict warnings-as-fatal harness.
 Table~\ref{tab:bench-stats} quantifies how far apart these settings are.
 A RealBench module task averages an order of magnitude more code lines
 and synthesized cells than a VerilogEval problem, and is specified by a
-document two orders of magnitude longer. Alone among the suites, it
-instantiates submodules at all. The distinction is not cosmetic.
-Chapter~\ref{ch:06} shows that the phenomena that dominate RealBench
+document more than thirty times longer. It is also the only suite
+whose tasks routinely instantiate submodules. The distinction is not cosmetic.
+Chapter~\ref{ch:05} shows that the phenomena that dominate RealBench
 (interface contracts, reuse, integration) are precisely the ones
 self-contained benchmarks cannot exhibit.
 
@@ -175,15 +175,15 @@ queries to a small model~\citep{ding2024hybridllm}; RouteLLM learns
 routers from human preference data~\citep{ong2024routellm}; AutoMix
 self-verifies before escalating~\citep{aggarwal2024automix}. All of these
 route between \emph{models} on general text tasks, assuming the larger
-model weakly dominates in quality. Our router (Chapter~\ref{ch:04})
+model weakly dominates in quality. Our router (Section~\ref{sec:pipeline-routing})
 differs on both axes. It routes between \emph{workflows} over the same
-model --- a cheap direct flow and an expensive agentic pipeline --- and
+model --- a cheap direct flow and an expensive agentic planning flow --- and
 the expensive flow does \emph{not} dominate. On self-contained algorithmic
-modules the pipeline is actively harmful
+modules the planning flow is actively harmful
 (Section~\ref{sec:router-motivation}), so routing is about matching task
 \emph{character} to flow \emph{shape}, not buying quality with compute.
 Its cascade structure is also domain-specific. The mid-tier probe
-inspects a structured artifact the pipeline produces anyway (the plan),
+inspects the planning flow's own first artifact (the plan),
 so the escalation step costs one planner call rather than a full
 duplicate generation.
 

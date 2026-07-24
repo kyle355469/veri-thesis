@@ -1,33 +1,32 @@
 % !TeX root = ../main.tex
 
-% TODO(author): 中文摘要為英文摘要之翻譯初稿，請核對術語與行文後定稿。
 \begin{abstract}
 
-大型語言模型（LLM）已能生成語法正確的程式碼，然而在真實硬體專案中，暫存器傳輸級
-（RTL）設計工作多以整合與矽智財（IP）重用為主，而非從零撰寫演算法模組。本論文以
+近年來大型語言模型（LLM）已能生成語法正確的程式碼，然而在真實硬體專案中，暫存器傳輸級
+（RTL）設計工作多以整合與矽智財（IP）重用為主，而非從零撰寫演算法模組，因此對於模型需要能力的要求和軟體設計不同。本論文以
 RealBench 基準測試中源自三個真實開源 IP 專案（AES 加密核心、SD 卡控制器、E203
 RISC-V 處理器核心）的 60 個模組級任務為評測對象，研究如何以系統工程手段——規劃、
 接地（grounding）、驗證、修復與路由——提升固定開源權重模型的 RTL 生成能力。
 
 本論文提出兩項主要貢獻。其一為兩階段代理式 IP 重用流水線：規劃代理透過
 IP 重用工具（目錄檢索、候選 IP 檢視與評分、介面相容性檢查）針對每個任務
-的真實 IP 目錄進行規劃，並以目錄注入、封閉詞彙表對齊、完整性檢查的三階段檢查
-產生可稽核的結構化重用計畫，再由生成器在Verilator 驗證與修復迴圈下
+的真實 IP 目錄進行規劃，並以封閉詞彙表對齊、完整性檢查的兩階段檢查
+產生可追溯的結構化重用計畫，再由生成器在 Verilator 驗證與修復迴圈下
 產生 Verilog。在 T 為零的對照實驗中，流水線通過率達 25.0\%（語法 61.7\%），
-為同一模型直接提示（8.3\%／25.0\%）的 3.0 倍，且增益完全集中於 IP 重用密集的
-E203 家族。其二為逐任務路由器，依任務性質在完整流水線與低成本直接生成之間選擇流程。
+為同一模型直接提示（8.3\%／25.0\%）的 3.0 倍，且增益幾乎全數集中於 IP 重用密集的
+E203 家族。其二為逐任務路由器，依任務性質在完整規劃流程與低成本直接生成之間選擇流程。
 本論文的基準測試作弊稽核發現，原始路由規則的極性係擬合於受污染的解答集；
-改以清洗後證據重新推導規則——預設走流水線，僅窄小的自含運算葉模組
-走直接生成——後，路由器維持全流水線基準臂 21/60 的解題數，單樣本通過率
-與語法率均優於原規則，且完全不受洩漏影響；以清洗後樣本在較大模型規模下
-重新評分時，更額外解出所有全流水線實驗臂皆未解出的一題。
+改以清洗後證據重新推導規則——預設走規劃流程，僅窄小的自含運算底層模組
+走直接生成——後，路由器與其取代的原規則同樣解出 21/60 題，單樣本通過率
+與語法率均較高，且完全不受洩漏影響。
 
 本論文同時以對照消融精確量化各輔助機制：語意修復快取單調提升語法率
 （59.4\%→66.9\%），並使通過樣本更集中於可解任務；兩種修復階段皆呈
 「速修或永不修」分布，精簡的修復預算（語法約 6 次、功能不超過 4 次）
 即可保留幾乎全部的修復成功案例，同時大幅節省運算；以黃金模組
 檢驗持續零分任務，發現並向上游回報一項測試平台競爭條件（已獲基準採納
-修復），亦確認其餘零分為真實難度；同一檢測反向檢驗通過樣本時，
+修復），另查出一項黃金模型本身即無法通過評分的基準缺陷，並確認其餘
+零分為真實難度；同一檢測反向檢驗通過樣本時，
 更查獲一項提示端洩漏——直接生成提示中出現基準參考模型名稱，使部分樣本
 僅靠實例化黃金模型即可通過——本文所有數據均已剔除此類樣本。
 整體結果顯示：下一步的突破點不在
@@ -38,52 +37,53 @@ E203 家族。其二為逐任務路由器，依任務性質在完整流水線與
 
 \begin{abstract*}
 
-Large language models generate syntactically plausible code, but real-world
-RTL engineering is dominated by integration and IP reuse rather than
-freestanding algorithm writing. This thesis studies how far system
-engineering --- planning, grounding, verification, repair, and routing
-around fixed open-weight models --- can push LLM-based Verilog generation
-on RealBench, a benchmark of 60 module-level tasks drawn from three real
-open-source IP projects (an AES cipher core, an SD-card controller, and
-the E203 RISC-V processor core) and scored by a strict warnings-as-fatal
-compile-and-simulate harness.
+Large language models can now generate syntactically correct code, but in
+real hardware projects RTL design work is dominated by integration and IP
+reuse rather than writing algorithm modules from scratch, so the abilities
+it demands of a model differ from those of software design. This thesis
+evaluates on the 60 module-level tasks in the RealBench benchmark, drawn
+from three real open-source IP projects (an AES cipher core, an SD-card
+controller, and the E203 RISC-V processor core), and studies how far
+system engineering --- planning, grounding, verification, repair, and
+routing --- can push the RTL generation ability of fixed open-weight
+models.
 
-The thesis makes two primary contributions. First, a two-stage agentic
-IP-reuse pipeline. A planning agent works each task through a suite of
-IP-reuse tools --- catalog search, candidate inspection and scoring, and
-interface-compatibility checking --- and produces a structured, auditable
-reuse plan grounded by construction against a per-task catalog of the
-modules the environment actually provides (catalog injection,
-closed-vocabulary alignment, and a completeness gate). A generator then
-works under a Verilator verify-and-repair loop that mirrors the scoring
-environment exactly. At temperature zero the pipeline passes
-25.0\% of tasks (61.7\% syntax) against the same model's direct-prompt
-8.3\% (25.0\%), a $3.0\times$ improvement concentrated entirely in the
-reuse-rich processor-core family. Second, a per-task router that
-matches task character to generation flow between the full pipeline
-and a cheap direct flow. The thesis's own benchmark-gaming audit
-showed the rule's original polarity had been fitted to a contaminated
-solution set, so the rule was re-derived on cleaned evidence ---
-pipeline by default, direct generation only for narrow self-contained
-computational leaves. The re-derived router holds the all-pipeline
-arm's coverage (21 of 60 tasks solved) with higher per-sample pass and
-syntax rates than the original rule and no exposure to the leak, and,
-re-scored at the larger model scale, recovers one task that
-all-pipeline arms miss.
+The thesis makes two main contributions. The first is a two-stage agentic
+IP-reuse pipeline. A planning agent plans each task against its real IP
+catalog through a suite of IP-reuse tools (catalog search, candidate IP
+inspection and scoring, and interface-compatibility checking), and a
+two-stage check of closed-vocabulary alignment and completeness turns the
+result into a structured, traceable reuse plan; a generator then writes
+the Verilog under a Verilator verify-and-repair loop. In the
+temperature-zero controlled comparison the pipeline passes 25.0\% of
+tasks (61.7\% syntax), 3.0$\times$ the same model under direct prompting
+(8.3\%/25.0\%), with the gains concentrated almost entirely in the
+reuse-heavy E203 family. The second is a per-task router that chooses by
+task character between the full planning flow and low-cost direct
+generation. The thesis's own benchmark-gaming audit found that the
+original routing rule's polarity had been fitted to a contaminated
+solution set. Re-derived on cleaned evidence --- planning flow by
+default, direct generation only for narrow self-contained computational
+leaf modules --- the router solves 21 of 60 tasks, the same as the rule
+it replaces, with higher per-sample pass and syntax rates and no exposure
+to the leak.
 
-Controlled ablations quantify the supporting machinery with equal care.
-A semantic repair cache lifts syntax monotonically (59.4\%$\to$66.9\%)
-while concentrating passing samples inside solvable tasks. Both repair
-phases converge within their first attempts, so compact budgets
-($\approx$6 syntax, $\leq$4 functional) keep essentially all rescues
-at a fraction of the compute. A golden-model audit of persistently
-failing tasks uncovered a testbench race condition --- which the
-benchmark has since fixed upstream --- while confirming the remaining
-zeros as genuine difficulty. Turned on the passes as well, the same audit
-caught a prompt-side leak of reference-model names that had let
-directly-prompted samples pass by wrapping the benchmark's own golden
-model; every reported number excludes these samples. The clearest opportunity at the end is neither
-syntax, nor planning, nor model scale, but functional correctness, which
-will reward a richer feedback signal than a mismatch count.
+Controlled ablations quantify each supporting mechanism precisely.
+A semantic repair cache lifts the syntax rate monotonically
+(59.4\%$\to$66.9\%) and concentrates passing samples inside solvable
+tasks. Both repair phases show a fix-fast-or-never distribution, so
+compact repair budgets (about 6 syntax attempts, at most 4 functional)
+keep essentially all repair successes and cut compute substantially.
+A golden-model check of persistently zero-scoring tasks found and
+reported upstream a testbench race condition, which the benchmark has
+since fixed; it also uncovered a second benchmark defect whose golden
+model fails its own scoring build, and confirmed the remaining zeros as
+genuine difficulty. Turned around on the passing samples, the same check
+caught a prompt-side leak. The direct-generation prompt exposes the
+benchmark's reference-model names, and some samples passed just by
+instantiating the golden model; every number in this thesis excludes
+such samples. The overall results place the next breakthrough not in
+syntax, planning, or model scale, but in functional correctness, which
+needs a richer feedback signal than a mismatch count.
 
 \end{abstract*}

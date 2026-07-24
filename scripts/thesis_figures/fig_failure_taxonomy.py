@@ -1,4 +1,4 @@
-"""Fig 6.6: outcome taxonomy stacked bars across runs (incl. 20B vs 120B)."""
+"""Fig 6.6: outcome taxonomy stacked bars across runs (incl. repair-budget arm)."""
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -7,9 +7,10 @@ from common import STATUS, despine, load_records, save
 
 ARMS = [
     ("Pure model\n(t0, 60)", "realbench_direct_model"),
-    ("Pipeline\n(t0, 60)", "agentic_plan_legacy_realbench_plan_hallu_fix_t0"),
-    ("Pipeline 20B\n(60×20)", "agentic_plan_legacy_realbench_oss20b_plan_hallu_no_rep_cache"),
-    ("Pipeline 120B\n(60×10)", "agentic_plan_legacy_realbench_oss120b_plan_hallu_tool_call"),
+    ("Planning\n(t0, 60)", "agentic_plan_legacy_realbench_plan_hallu_fix_t0"),
+    ("Planning 20B\n(60×20)", "agentic_plan_legacy_realbench_oss20b_plan_hallu_no_rep_cache"),
+    ("Func-10/10\n(60×10)", "repair_spec_slice_oss20b_func_v2_time-err-off_10syn_10func"),
+    ("Func-10/10\n120B (60×10)", "repair_spec_slice_oss120b_func_v2_time-err-off_10syn_10func"),
 ]
 
 BUCKETS = [
@@ -32,7 +33,7 @@ def taxonomy(recs):
             "_compile_fail_share": 100 * func_fail / syn_ok if syn_ok else 0}
 
 
-fig, ax = plt.subplots(figsize=(5.4, 2.9))
+fig, ax = plt.subplots(figsize=(6.2, 2.9))
 x = np.arange(len(ARMS))
 bottoms = np.zeros(len(ARMS))
 vals = {}
